@@ -3,6 +3,8 @@
 // @namespace    http://tampermonkey.net/
 // @version      1.0
 // @description  Shows recommended water spider count based on active stowers on the Vantage station map
+// @updateURL    https://raw.githubusercontent.com/nloprete/amazon-ops-tools/main/vantage-water-spiders.user.js
+// @downloadURL  https://raw.githubusercontent.com/nloprete/amazon-ops-tools/main/vantage-water-spiders.user.js
 // @match        https://vantage.amazon.com/app/fulfillment-dashboards/station-map*
 // @match        https://fclm-portal.amazon.com/reports/processPathRollup*
 // @connect      fclm-portal.amazon.com

@@ -3,6 +3,8 @@
 // @namespace    http://tampermonkey.net/
 // @version      1.0
 // @description  Paste a list of logins to see who is on site and their Vantage station number
+// @updateURL    https://raw.githubusercontent.com/nloprete/amazon-ops-tools/main/fclm-station-lookup.user.js
+// @downloadURL  https://raw.githubusercontent.com/nloprete/amazon-ops-tools/main/fclm-station-lookup.user.js
 // @match        https://fclm-portal.amazon.com/*
 // @connect      vantage.amazon.com
 // @connect      atoz.amazon.work
