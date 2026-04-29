@@ -67,6 +67,14 @@
     .sl-minimize-btn:hover { color: #fff; }
     .sl-panel.minimized .sl-body { display: none; }
 
+    .sl-body {
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      flex: 1;
+      min-height: 0;
+    }
+
     .sl-input {
       background: #3a4553;
       border: 1px solid #ff9900;
@@ -104,6 +112,7 @@
       overflow-y: auto;
       flex: 1;
       font-size: 11px;
+      min-height: 0;
     }
     .sl-results table {
       width: 100%;
