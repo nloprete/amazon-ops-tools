@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Vantage - GCA Pending Alert
 // @namespace    http://tampermonkey.net/
-// @version      1.0
+// @version      1.1
 // @description  Flags stations yellow on Vantage for associates with pending GCAs (Guided Coaching Activities). Shows "GCA" badge linking to the coaching page.
 // @updateURL    https://raw.githubusercontent.com/nloprete/amazon-ops-tools/main/vantage-gca-alert.user.js
 // @downloadURL  https://raw.githubusercontent.com/nloprete/amazon-ops-tools/main/vantage-gca-alert.user.js
@@ -10,6 +10,7 @@
 // @grant        GM_addStyle
 // @grant        GM_getValue
 // @grant        GM_setValue
+// @grant        GM_addValueChangeListener
 // @grant        none
 // ==/UserScript==
 
@@ -453,7 +454,7 @@
       try {
         const data = JSON.parse(raw);
         const age = Date.now() - (data.timestamp || 0);
-        const stale = age > 30 * 60 * 1000;
+        const stale = age > 60 * 60 * 1000; // Stale after 60 minutes
         return {
           entries: data.entries || data.logins.map(l => ({ login: l, expires: null })),
           logins: data.logins || (data.entries || []).map(e => e.login),
@@ -748,6 +749,32 @@
           checkGCAs();
           addManualEntryOption();
           setInterval(checkGCAs, CHECK_INTERVAL);
+
+          // Live sync: instantly re-check when GCA page writes new data
+          if (hasGM && typeof GM_addValueChangeListener !== 'undefined') {
+            GM_addValueChangeListener('gca_data', (name, oldVal, newVal, remote) => {
+              if (remote) {
+                console.log('[GCA] Live sync: GCA data updated from another tab');
+                checkGCAs();
+              }
+            });
+          }
+
+          // Fallback: poll storage every 10 seconds for changes (non-TM or older TM)
+          let lastStorageTimestamp = 0;
+          setInterval(() => {
+            const raw = storageGet('gca_data', null);
+            if (raw) {
+              try {
+                const data = JSON.parse(raw);
+                if (data.timestamp && data.timestamp !== lastStorageTimestamp) {
+                  lastStorageTimestamp = data.timestamp;
+                  console.log('[GCA] Storage poll: detected new data, refreshing');
+                  checkGCAs();
+                }
+              } catch (e) {}
+            }
+          }, 10000);
 
           // Watch for floor/zone changes
           let lastZ = getZones().join(',');
