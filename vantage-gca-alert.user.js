@@ -47,19 +47,19 @@
     `);
 
     function scrapeGCALogins() {
-      const gcaEntries = []; // Store {login, expires} objects
+      const gcaEntries = []; // Store {login, expires, process} objects
 
       // The GCA page shows entries like:
       //   "Donastorg,Meredith mereddon@"
       //   "Expires on Friday, May 22, 2026 at 7:53:05 AM"
-      // Each entry is in a card/block. We need login + expiration date.
+      //   "Process: Inbound Problem Solve"
+      // Each entry is in a card/block. We need login + expiration date + process.
 
       // Find all cards/blocks that contain a GCA entry
-      // Each entry has: login@, expiration text, process, supervisor
       const bodyText = document.body.innerText || '';
       const seenLogins = new Set();
 
-      // Strategy: find all elements with "login@" text, then look nearby for expiration
+      // Strategy: find all elements with "login@" text, then look nearby for expiration and process
       const allElements = document.querySelectorAll('a, span, small, div, p, td, li');
       allElements.forEach(el => {
         const text = el.textContent.trim();
@@ -72,16 +72,18 @@
                             el.parentElement?.parentElement?.parentElement;
 
           let expires = null;
+          let process = null;
+
           if (container) {
-            // Look for expiration text in the container
             const containerText = container.textContent || '';
+
+            // Extract expiration
             const expMatch = containerText.match(/expires\s+on\s+[\w,]+\s+([\w]+\s+\d{1,2},\s+\d{4})\s+at\s+([\d:]+\s*[AP]M)/i);
             if (expMatch) {
               try {
                 expires = new Date(expMatch[1] + ' ' + expMatch[2]).toISOString();
               } catch (e) {}
             }
-            // Also try: "Expires on Thursday, May 21, 2026 at 7:13:08 AM"
             if (!expires) {
               const expMatch2 = containerText.match(/expires\s+on\s+\w+,\s+([\w]+\s+\d{1,2},\s+\d{4})\s+at\s+([\d:]+\s*[AP]M)/i);
               if (expMatch2) {
@@ -91,7 +93,15 @@
               }
             }
 
-            // Check if this is a supervisor login (appears after "Supervisor:")
+            // Extract process
+            const processMatch = containerText.match(/process:\s*([^\n\r]+)/i);
+            if (processMatch) {
+              process = processMatch[1].trim();
+              // Clean up — remove trailing text that might be from next field
+              process = process.replace(/\s*supervisor:.*$/i, '').trim();
+            }
+
+            // Check if this is a supervisor login
             const isSupervisor = /supervisor:\s*$/i.test(
               containerText.substring(0, containerText.indexOf(text))
             );
@@ -99,7 +109,7 @@
           }
 
           seenLogins.add(login);
-          gcaEntries.push({ login, expires });
+          gcaEntries.push({ login, expires, process });
         }
       });
 
@@ -113,7 +123,7 @@
             const login = text.replace(/@$/, '').toLowerCase();
             if (!seenLogins.has(login)) {
               seenLogins.add(login);
-              gcaEntries.push({ login, expires: null });
+              gcaEntries.push({ login, expires: null, process: null });
             }
           }
         }
@@ -475,6 +485,7 @@
         rows += `<tr>
           <td class="login">${m.login}</td>
           <td class="station">${m.stationId}</td>
+          <td style="color:#aab7c4;font-size:10px">${m.process || '—'}</td>
           <td style="color:${color};font-weight:700">${getUrgencyLabel(m.urgency)}</td>
           <td style="color:#aab7c4;font-size:10px">${expLabel}</td>
           <td><a href="${GCA_EMPLOYEE_URL}${m.login.toLowerCase()}" target="_blank" style="color:#f5a623">Open</a></td>
@@ -485,7 +496,7 @@
         <div class="gca-list-modal">
           <h3>🟡 Pending GCAs on Floor</h3>
           <table>
-            <thead><tr><th>Login</th><th>Station</th><th>Urgency</th><th>Expires</th><th></th></tr></thead>
+            <thead><tr><th>Login</th><th>Station</th><th>Process</th><th>Urgency</th><th>Expires</th><th></th></tr></thead>
             <tbody>${rows}</tbody>
           </table>
           <button class="close-btn" id="gca-close">CLOSE</button>
@@ -535,9 +546,13 @@
         return;
       }
 
-      // Build a map of login -> expiration
+      // Build a map of login -> expiration and process
       const expiresMap = new Map();
-      entries.forEach(e => expiresMap.set(e.login.toLowerCase(), e.expires));
+      const processMap = new Map();
+      entries.forEach(e => {
+        expiresMap.set(e.login.toLowerCase(), e.expires);
+        processMap.set(e.login.toLowerCase(), e.process);
+      });
 
       // Fetch current station assignments
       const stations = await fetchStationData();
@@ -559,6 +574,7 @@
           if (!el) return;
 
           const expires = expiresMap.get(login);
+          const process = processMap.get(login);
           const urgency = getUrgency(expires);
           const color = getUrgencyColor(urgency);
           const label = getUrgencyLabel(urgency);
@@ -571,13 +587,30 @@
           // Override border color based on urgency
           el.style.setProperty('border-color', color, 'important');
 
-          // Add clickable badge with urgency-based color
+          // Add clickable badge with urgency-based color and process info
           const badge = document.createElement('a');
           badge.className = 'gca-badge';
-          badge.textContent = label;
+          // Show process abbreviation on badge if available
+          const processShort = process
+            ? process.replace(/inbound problem solve/i, 'IPS')
+                     .replace(/outbound problem solve/i, 'OPS')
+                     .replace(/space management/i, 'SM')
+                     .replace(/reverse logistics/i, 'RL')
+                     .replace(/fc amnesty/i, 'AMN')
+                     .replace(/stow/i, 'STW')
+                     .replace(/pick/i, 'PCK')
+                     .replace(/pack/i, 'PAK')
+                     .replace(/ship/i, 'SHP')
+                     .replace(/receive/i, 'RCV')
+                     .replace(/rebin/i, 'RBN')
+                     .replace(/induct/i, 'IND')
+                     .replace(/icqa/i, 'ICQA')
+                     .replace(/decant/i, 'DCT')
+            : null;
+          badge.textContent = processShort ? `${label} · ${processShort}` : label;
           badge.href = GCA_EMPLOYEE_URL + login;
           badge.target = '_blank';
-          badge.title = `${s.user_id} — pending GCA${expires ? ' (expires ' + new Date(expires).toLocaleDateString() + ')' : ''}`;
+          badge.title = `${s.user_id} — pending GCA\nProcess: ${process || 'Unknown'}${expires ? '\nExpires: ' + new Date(expires).toLocaleDateString() : ''}`;
           badge.style.background = color;
           badge.style.color = (urgency === 'today' || urgency === 'expired') ? '#fff' : '#000';
           el.appendChild(badge);
@@ -588,7 +621,8 @@
             stationId: s.station_id,
             zone: s.zone || '',
             urgency,
-            expires
+            expires,
+            process
           });
         }
       });
