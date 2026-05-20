@@ -10,10 +10,38 @@
 // @grant        GM_addStyle
 // @grant        GM_getValue
 // @grant        GM_setValue
+// @grant        none
 // ==/UserScript==
 
 (function () {
   'use strict';
+
+  // ============================================================
+  // STORAGE ABSTRACTION — works with or without Tampermonkey
+  // Uses GM_getValue/GM_setValue if available, falls back to localStorage
+  // Cross-domain sync uses URL hash when GM is not available
+  // ============================================================
+  const hasGM = (typeof GM_getValue !== 'undefined' && typeof GM_setValue !== 'undefined');
+
+  function storageGet(key, fallback) {
+    if (hasGM) return storageGet(key, fallback);
+    try {
+      const val = localStorage.getItem('gca_' + key);
+      return val !== null ? val : fallback;
+    } catch (e) { return fallback; }
+  }
+
+  function storageSet(key, value) {
+    if (hasGM) { storageSet(key, value); return; }
+    try { localStorage.setItem('gca_' + key, value); } catch (e) {}
+  }
+
+  function addStyle(css) {
+    if (hasGM && typeof GM_addStyle !== 'undefined') { addStyle(css); return; }
+    const style = document.createElement('style');
+    style.textContent = css;
+    document.head.appendChild(style);
+  }
 
   // ============================================================
   // CONFIGURATION
@@ -26,7 +54,7 @@
   // GCA PAGE SCRAPER (runs on guided-coaching.corp.amazon.com)
   // ============================================================
   function runGCAScraper() {
-    GM_addStyle(`
+    addStyle(`
       .gca-scraper-badge {
         position: fixed;
         top: 8px;
@@ -183,12 +211,40 @@
           timestamp: Date.now(),
           source: window.location.href
         };
-        GM_setValue('gca_data', JSON.stringify(data));
+        storageSet('gca_data', JSON.stringify(data));
         console.log('[GCA] Saved', entries.length, 'entries:', entries);
+
+        // For non-Tampermonkey browsers: provide a copy-to-clipboard button for cross-domain sync
+        if (!hasGM) {
+          updateCopyButton(data);
+        }
       } else {
         console.log('[GCA] No entries found this pass');
       }
       updateBadge(entries);
+    }
+
+    // Copy button for non-TM browsers — lets user copy GCA data to paste on Vantage
+    function updateCopyButton(data) {
+      let btn = document.getElementById('gca-copy-btn');
+      if (!btn) {
+        btn = document.createElement('button');
+        btn.id = 'gca-copy-btn';
+        btn.style.cssText = 'position:fixed;top:60px;right:8px;z-index:99999;background:#f5a623;color:#000;border:none;border-radius:6px;padding:8px 14px;font-family:"Amazon Ember",Arial,sans-serif;font-size:12px;font-weight:700;cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,0.3);';
+        btn.textContent = '📋 Copy GCA Data for Vantage';
+        document.body.appendChild(btn);
+      }
+      btn.onclick = () => {
+        const encoded = btoa(JSON.stringify(data));
+        navigator.clipboard.writeText(encoded).then(() => {
+          btn.textContent = '✓ Copied! Paste on Vantage (right-click sync badge)';
+          btn.style.background = '#4caf50';
+          setTimeout(() => {
+            btn.textContent = '📋 Copy GCA Data for Vantage';
+            btn.style.background = '#f5a623';
+          }, 3000);
+        });
+      };
     }
 
     // Wait for the coaching list to render
@@ -222,7 +278,7 @@
   // VANTAGE SIDE (runs on vantage.amazon.com)
   // ============================================================
   function runVantage() {
-    GM_addStyle(`
+    addStyle(`
       @keyframes gca-pulse {
         0%, 100% {
           box-shadow: 0 0 12px 6px rgba(245, 166, 35, 0.9);
@@ -392,7 +448,7 @@
 
     // --- Get GCA logins from GM storage ---
     function getGCAData() {
-      const raw = GM_getValue('gca_data', null);
+      const raw = storageGet('gca_data', null);
       if (!raw) return { entries: [], logins: [], timestamp: 0, stale: true };
       try {
         const data = JSON.parse(raw);
@@ -656,15 +712,27 @@
       syncBadge.addEventListener('contextmenu', (e) => {
         e.preventDefault();
         const input = prompt(
-          'Paste GCA logins (comma or space separated):\n\n' +
-          'This manually sets the list. Open GCA page in another tab for auto-sync.',
+          'Paste GCA data (from Copy button on GCA page) or logins (comma separated):\n\n' +
+          'If using Tampermonkey, data syncs automatically between tabs.',
           (getGCAData().logins || []).join(', ')
         );
         if (input !== null) {
+          // Try to decode as base64 JSON first (from copy button)
+          try {
+            const decoded = JSON.parse(atob(input.trim()));
+            if (decoded.logins || decoded.entries) {
+              decoded.timestamp = Date.now();
+              storageSet('gca_data', JSON.stringify(decoded));
+              checkGCAs();
+              return;
+            }
+          } catch (e) {}
+
+          // Fall back to comma-separated logins
           const logins = input.split(/[\s,]+/).map(l => l.trim().toLowerCase()).filter(l => l.length >= 3);
-          const entries = logins.map(l => ({ login: l, expires: null }));
+          const entries = logins.map(l => ({ login: l, expires: null, process: null }));
           const data = { entries, logins, timestamp: Date.now(), source: 'manual' };
-          GM_setValue('gca_data', JSON.stringify(data));
+          storageSet('gca_data', JSON.stringify(data));
           checkGCAs();
         }
       });
