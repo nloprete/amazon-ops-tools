@@ -58,11 +58,22 @@
   // Create popup
   const popup = document.createElement('div');
   popup.className = 'ds-popup';
-  popup.innerHTML = '<button class="ds-close">✕</button><div class="ds-sum">0</div><div class="ds-label">0 cells selected</div>';
+  popup.innerHTML = '<button class="ds-close">✕</button><div class="ds-sum">0</div><div class="ds-label">0 cells selected</div><button class="ds-clear" style="margin-top:6px;background:#ff4d4d;color:#fff;border:none;border-radius:4px;padding:3px 10px;font-size:10px;font-weight:700;cursor:pointer;width:100%;">Clear Total</button>';
   document.body.appendChild(popup);
+
+  let runningTotal = 0;
+  let totalCells = 0;
 
   popup.querySelector('.ds-close').addEventListener('click', () => {
     popup.style.display = 'none';
+    clearSelection();
+  });
+
+  popup.querySelector('.ds-clear').addEventListener('click', () => {
+    runningTotal = 0;
+    totalCells = 0;
+    popup.querySelector('.ds-sum').textContent = '0';
+    popup.querySelector('.ds-label').textContent = '0 cells total';
     clearSelection();
   });
 
@@ -128,9 +139,11 @@
     });
 
     if (count > 0) {
-      const display = sum % 1 === 0 ? sum.toLocaleString() : sum.toLocaleString(undefined, { minimumFractionDigits: 1, maximumFractionDigits: 2 });
+      runningTotal += sum;
+      totalCells += count;
+      const display = runningTotal % 1 === 0 ? runningTotal.toLocaleString() : runningTotal.toLocaleString(undefined, { minimumFractionDigits: 1, maximumFractionDigits: 2 });
       popup.querySelector('.ds-sum').textContent = display;
-      popup.querySelector('.ds-label').textContent = count + ' cells selected';
+      popup.querySelector('.ds-label').textContent = totalCells + ' cells total (last: +' + count + ')';
       popup.style.display = 'block';
       popup.style.left = Math.min(e.clientX + 15, window.innerWidth - 200) + 'px';
       popup.style.top = Math.min(e.clientY - 30, window.innerHeight - 100) + 'px';
@@ -186,16 +199,14 @@
 
   // Copy sum with Ctrl+C when cells are selected
   document.addEventListener('keydown', (e) => {
-    if (e.ctrlKey && e.key === 'c' && selectedCells.size > 0) {
-      let sum = 0;
-      selectedCells.forEach(cell => {
-        const val = getCellValue(cell);
-        if (val !== null) sum += val;
-      });
-      const display = sum % 1 === 0 ? sum.toString() : sum.toFixed(2);
+    if (e.ctrlKey && e.key === 'c' && runningTotal > 0) {
+      const display = runningTotal % 1 === 0 ? runningTotal.toString() : runningTotal.toFixed(2);
       navigator.clipboard.writeText(display);
       popup.querySelector('.ds-sum').textContent = 'Copied ✓';
-      setTimeout(() => { popup.style.display = 'none'; clearSelection(); }, 1500);
+      setTimeout(() => {
+        const d = runningTotal % 1 === 0 ? runningTotal.toLocaleString() : runningTotal.toLocaleString(undefined, { minimumFractionDigits: 1, maximumFractionDigits: 2 });
+        popup.querySelector('.ds-sum').textContent = d;
+      }, 1500);
     }
   });
 })();
