@@ -467,11 +467,6 @@
         th1.className = 'irdr-station-header';
         th1.textContent = 'Station';
         thead.appendChild(th1);
-
-        const th2 = document.createElement('th');
-        th2.className = 'irdr-engage-header';
-        th2.textContent = 'Engage';
-        thead.appendChild(th2);
       }
 
       table.querySelectorAll('tbody tr').forEach((row) => {
@@ -493,13 +488,6 @@
           td.innerHTML = v
             ? `<span class="irdr-vantage-station">${v.stationId}</span>`
             : `<span class="irdr-vantage-station no-station">—</span>`;
-          row.appendChild(td);
-        }
-
-        if (!row.querySelector('.irdr-engage-cell')) {
-          const td = document.createElement('td');
-          td.className = 'irdr-engage-cell';
-          td.innerHTML = engageHtml(e?.topics || [], e?.hasPending, e?.dueSoon);
           row.appendChild(td);
         }
 
