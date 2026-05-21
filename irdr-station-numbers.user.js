@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         IRDR STU - Station Numbers + Engage Status
 // @namespace    http://tampermonkey.net/
-// @version      5.1
-// @description  Shows AA station numbers (Vantage) and pending engagements (AtoZ Engage) on IRDR STU
+// @version      5.2
+// @description  Shows AA station numbers (Vantage), STU completion leaderboard, and overdue week tracking on IRDR STU
 // @updateURL    https://raw.githubusercontent.com/nloprete/amazon-ops-tools/main/irdr-station-numbers.user.js
 // @downloadURL  https://raw.githubusercontent.com/nloprete/amazon-ops-tools/main/irdr-station-numbers.user.js
 // @match        https://ont-base.corp.amazon.com/*/icqa/irdr/stu*
