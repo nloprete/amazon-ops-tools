@@ -11,7 +11,6 @@
 // @grant        GM_getValue
 // @grant        GM_setValue
 // @grant        GM_addValueChangeListener
-// @grant        none
 // ==/UserScript==
 
 (function () {
