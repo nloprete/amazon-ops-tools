@@ -25,7 +25,7 @@
   const hasGM = (typeof GM_getValue !== 'undefined' && typeof GM_setValue !== 'undefined');
 
   function storageGet(key, fallback) {
-    if (hasGM) return storageGet(key, fallback);
+    if (hasGM) return GM_getValue(key, fallback);
     try {
       const val = localStorage.getItem('gca_' + key);
       return val !== null ? val : fallback;
@@ -33,12 +33,12 @@
   }
 
   function storageSet(key, value) {
-    if (hasGM) { storageSet(key, value); return; }
+    if (hasGM) { GM_setValue(key, value); return; }
     try { localStorage.setItem('gca_' + key, value); } catch (e) {}
   }
 
   function addStyle(css) {
-    if (hasGM && typeof GM_addStyle !== 'undefined') { addStyle(css); return; }
+    if (hasGM && typeof GM_addStyle !== 'undefined') { GM_addStyle(css); return; }
     const style = document.createElement('style');
     style.textContent = css;
     document.head.appendChild(style);
