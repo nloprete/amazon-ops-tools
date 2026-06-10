@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Vantage - Andon Flash Alert (5min+)
 // @namespace    http://tampermonkey.net/
-// @version      2.6
+// @version      2.7
 // @description  Flashes stations red when Out of Work andons exceed 5 minutes. Department-specific.
 // @updateURL    https://raw.githubusercontent.com/nloprete/amazon-ops-tools/main/vantage-andon-alert.user.js
 // @downloadURL  https://raw.githubusercontent.com/nloprete/amazon-ops-tools/main/vantage-andon-alert.user.js
@@ -43,11 +43,14 @@
       font-size: 12px;
       box-shadow: 0 1px 4px rgba(0,0,0,0.1);
       border: 1px solid #e0e0e0;
-      min-width: 240px;
+      position: fixed;
+      top: 340px;
+      left: 280px;
+      z-index: 99998;
+      min-width: 220px;
       max-height: 300px;
       overflow-y: auto;
       display: none;
-      margin-top: 8px;
     }
     .andon-list-panel .alp-title {
       color: #c62828;
@@ -213,39 +216,7 @@
   const andonListPanel = document.createElement('div');
   andonListPanel.className = 'andon-list-panel';
   andonListPanel.innerHTML = '<div class="alp-title">⚠️ Out of Work Andons</div><div id="alp-body"></div>';
-
-  // Insert after the Andon Details widget
-  function insertPanel() {
-    if (andonListPanel.parentElement) return;
-    // Find the Andon Details widget by looking for its title text
-    const allWidgets = document.querySelectorAll('[class*="widget"], [class*="card"], [class*="panel"], [class*="pinned"]');
-    for (const w of allWidgets) {
-      if (w.textContent.includes('Andon Details') && w.textContent.length < 500) {
-        w.parentElement.insertBefore(andonListPanel, w.nextSibling);
-        console.log('[Andon] Panel inserted after Andon Details widget');
-        return;
-      }
-    }
-    // Fallback: find by link text "Andon Details"
-    const links = document.querySelectorAll('a, h2, h3, span, div');
-    for (const el of links) {
-      if (el.textContent.trim() === 'Andon Details') {
-        const container = el.closest('[class*="widget"], [class*="card"], [class*="panel"]') || el.parentElement;
-        if (container) {
-          container.parentElement.insertBefore(andonListPanel, container.nextSibling);
-          console.log('[Andon] Panel inserted after Andon Details container');
-          return;
-        }
-      }
-    }
-    // Last fallback: append to body as fixed
-    andonListPanel.style.position = 'fixed';
-    andonListPanel.style.top = '140px';
-    andonListPanel.style.left = '12px';
-    andonListPanel.style.zIndex = '99998';
-    document.body.appendChild(andonListPanel);
-    console.log('[Andon] Panel appended to body (fallback)');
-  }
+  document.body.appendChild(andonListPanel);
 
   // --- Fetch & Check ---
   function fetchAndons() {
@@ -301,7 +272,6 @@
     counter.style.display = count > 0 ? 'block' : 'none';
 
     // Update the active andon list panel
-    insertPanel();
     activeAndons.sort((a, b) => b.mins - a.mins);
     const alpBody = document.getElementById('alp-body');
     if (alpBody) {
