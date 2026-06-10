@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Vantage - Andon Flash Alert (5min+)
 // @namespace    http://tampermonkey.net/
-// @version      3.1
+// @version      3.2
 // @description  Flashes stations red when Out of Work andons exceed 5 minutes. Department-specific.
 // @updateURL    https://raw.githubusercontent.com/nloprete/amazon-ops-tools/main/vantage-andon-alert.user.js
 // @downloadURL  https://raw.githubusercontent.com/nloprete/amazon-ops-tools/main/vantage-andon-alert.user.js
@@ -38,45 +38,44 @@
     .andon-list-panel {
       background: #fff;
       border-radius: 8px;
-      padding: 12px 16px;
+      padding: 14px 18px;
       font-family: "Amazon Ember", Arial, sans-serif;
-      font-size: 12px;
-      box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+      font-size: 14px;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.2);
       border: 2px solid #ff4d4d;
       position: fixed;
-      top: 50%;
-      left: 50%;
-      transform: translate(-50%, -50%);
-      z-index: 9999999;
-      min-width: 260px;
-      max-height: 350px;
+      bottom: 50px;
+      left: 12px;
+      z-index: 99998;
+      min-width: 300px;
+      max-height: 400px;
       overflow-y: auto;
       display: none;
     }
     .andon-list-panel .alp-title {
       color: #c62828;
       font-weight: 700;
-      font-size: 14px;
-      margin-bottom: 8px;
-      padding-bottom: 6px;
+      font-size: 16px;
+      margin-bottom: 10px;
+      padding-bottom: 8px;
       border-bottom: 2px solid #ffcdd2;
     }
     .andon-list-panel .alp-row {
       display: flex;
       justify-content: space-between;
       align-items: center;
-      padding: 4px 0;
+      padding: 6px 0;
       border-bottom: 1px solid #f5f5f5;
     }
     .andon-list-panel .alp-row:last-child { border-bottom: none; }
     .andon-list-panel .alp-station {
       color: #232f3e;
       font-weight: 700;
-      font-size: 13px;
+      font-size: 16px;
     }
     .andon-list-panel .alp-time {
       font-weight: 700;
-      font-size: 13px;
+      font-size: 16px;
       color: #333;
     }
     .andon-list-panel .alp-time.warn { color: #ff9800; }
