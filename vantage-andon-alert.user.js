@@ -36,50 +36,44 @@
     .andon-counter .ct { color: red; font-weight: 700; font-size: 16px; }
 
     .andon-list-panel {
-      position: fixed;
-      bottom: 50px;
-      left: 12px;
-      z-index: 99998;
-      background: #232f3e;
-      color: #fff;
-      border-radius: 6px;
-      padding: 8px 12px;
+      background: #fff;
+      border-radius: 8px;
+      padding: 12px 16px;
       font-family: "Amazon Ember", Arial, sans-serif;
-      font-size: 11px;
-      border: 2px solid #ff4d4d;
-      box-shadow: 0 2px 12px rgba(0,0,0,0.4);
-      max-height: 300px;
-      overflow-y: auto;
-      min-width: 220px;
+      font-size: 12px;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.1);
+      border: 1px solid #e0e0e0;
+      margin: 8px 12px;
       display: none;
     }
     .andon-list-panel .alp-title {
-      color: #ff4d4d;
+      color: #c62828;
       font-weight: 700;
-      font-size: 12px;
-      margin-bottom: 6px;
-      border-bottom: 1px solid #3a4553;
-      padding-bottom: 4px;
+      font-size: 14px;
+      margin-bottom: 8px;
+      padding-bottom: 6px;
+      border-bottom: 2px solid #ffcdd2;
     }
     .andon-list-panel .alp-row {
       display: flex;
       justify-content: space-between;
       align-items: center;
-      padding: 3px 0;
-      border-bottom: 1px solid #3a4553;
+      padding: 4px 0;
+      border-bottom: 1px solid #f5f5f5;
     }
     .andon-list-panel .alp-row:last-child { border-bottom: none; }
     .andon-list-panel .alp-station {
-      color: #ff9900;
+      color: #232f3e;
       font-weight: 700;
-      font-size: 12px;
+      font-size: 13px;
     }
     .andon-list-panel .alp-time {
       font-weight: 700;
-      font-size: 12px;
+      font-size: 13px;
+      color: #333;
     }
     .andon-list-panel .alp-time.warn { color: #ff9800; }
-    .andon-list-panel .alp-time.crit { color: #ff0000; }
+    .andon-list-panel .alp-time.crit { color: #c62828; }
 
     .dept-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.8); z-index: 9999999; display: flex; align-items: center; justify-content: center; }
     .dept-box { background: #232f3e; border: 2px solid #ff9900; border-radius: 12px; padding: 24px 32px; text-align: center; font-family: "Amazon Ember", Arial, sans-serif; color: #fff; }
@@ -214,8 +208,25 @@
   // --- Active Andon List Panel ---
   const andonListPanel = document.createElement('div');
   andonListPanel.className = 'andon-list-panel';
-  andonListPanel.innerHTML = '<div class="alp-title">⚠️ Active Out of Work Andons</div><div id="alp-body"></div>';
-  document.body.appendChild(andonListPanel);
+  andonListPanel.innerHTML = '<div class="alp-title">⚠️ Out of Work Andons</div><div id="alp-body"></div>';
+
+  // Insert below the summary bar (will be placed once page loads)
+  function insertAndonPanel() {
+    if (andonListPanel.parentElement) return;
+    // Find the summary bar area — it's typically the first row of pinned widgets
+    const summaryBar = document.querySelector('.station-map-summary, .pinned-widgets, .dashboard-widgets, .widget-row');
+    if (summaryBar) {
+      summaryBar.parentElement.insertBefore(andonListPanel, summaryBar.nextSibling);
+    } else {
+      // Fallback: insert before the station map
+      const map = document.querySelector('.station-map-container, .station-map-body, .station-map, .station-map-item');
+      if (map && map.parentElement) {
+        map.parentElement.insertBefore(andonListPanel, map);
+      } else {
+        document.body.appendChild(andonListPanel);
+      }
+    }
+  }
 
   // --- Fetch & Check ---
   function fetchAndons() {
@@ -270,6 +281,7 @@
     counter.style.display = count > 0 ? 'block' : 'none';
 
     // Update the active andon list panel
+    insertAndonPanel();
     activeAndons.sort((a, b) => b.mins - a.mins);
     const alpBody = document.getElementById('alp-body');
     if (alpBody) {
@@ -287,7 +299,7 @@
     }
     andonListPanel.style.display = activeAndons.length > 0 ? 'block' : 'none';
     const titleEl = andonListPanel.querySelector('.alp-title');
-    if (titleEl) titleEl.textContent = `⚠️ Active Out of Work Andons (${activeAndons.length})`;
+    if (titleEl) titleEl.textContent = `⚠️ Out of Work Andons (${activeAndons.length})`;
   }
 
   // --- Init ---
