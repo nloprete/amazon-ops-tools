@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Vantage - Andon Flash Alert (5min+)
 // @namespace    http://tampermonkey.net/
-// @version      2.8
+// @version      2.9
 // @description  Flashes stations red when Out of Work andons exceed 5 minutes. Department-specific.
 // @updateURL    https://raw.githubusercontent.com/nloprete/amazon-ops-tools/main/vantage-andon-alert.user.js
 // @downloadURL  https://raw.githubusercontent.com/nloprete/amazon-ops-tools/main/vantage-andon-alert.user.js
@@ -44,10 +44,11 @@
       box-shadow: 0 2px 8px rgba(0,0,0,0.15);
       border: 1px solid #e0e0e0;
       position: fixed;
-      bottom: 50px;
-      left: 12px;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
       z-index: 99998;
-      min-width: 220px;
+      min-width: 250px;
       max-height: 300px;
       overflow-y: auto;
       display: none;
