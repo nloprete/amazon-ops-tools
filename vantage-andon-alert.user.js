@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Vantage - Andon Flash Alert (5min+)
 // @namespace    http://tampermonkey.net/
-// @version      2.1
+// @version      2.3
 // @description  Flashes stations red when Out of Work andons exceed 5 minutes. Department-specific.
 // @updateURL    https://raw.githubusercontent.com/nloprete/amazon-ops-tools/main/vantage-andon-alert.user.js
 // @downloadURL  https://raw.githubusercontent.com/nloprete/amazon-ops-tools/main/vantage-andon-alert.user.js
@@ -43,7 +43,13 @@
       font-size: 12px;
       box-shadow: 0 1px 4px rgba(0,0,0,0.1);
       border: 1px solid #e0e0e0;
-      margin: 8px 12px;
+      position: fixed;
+      top: 140px;
+      left: 12px;
+      z-index: 99998;
+      min-width: 240px;
+      max-height: 300px;
+      overflow-y: auto;
       display: none;
     }
     .andon-list-panel .alp-title {
@@ -209,24 +215,7 @@
   const andonListPanel = document.createElement('div');
   andonListPanel.className = 'andon-list-panel';
   andonListPanel.innerHTML = '<div class="alp-title">⚠️ Out of Work Andons</div><div id="alp-body"></div>';
-
-  // Insert below the summary bar (will be placed once page loads)
-  function insertAndonPanel() {
-    if (andonListPanel.parentElement) return;
-    // Find the summary bar area — it's typically the first row of pinned widgets
-    const summaryBar = document.querySelector('.station-map-summary, .pinned-widgets, .dashboard-widgets, .widget-row');
-    if (summaryBar) {
-      summaryBar.parentElement.insertBefore(andonListPanel, summaryBar.nextSibling);
-    } else {
-      // Fallback: insert before the station map
-      const map = document.querySelector('.station-map-container, .station-map-body, .station-map, .station-map-item');
-      if (map && map.parentElement) {
-        map.parentElement.insertBefore(andonListPanel, map);
-      } else {
-        document.body.appendChild(andonListPanel);
-      }
-    }
-  }
+  document.body.appendChild(andonListPanel);
 
   // --- Fetch & Check ---
   function fetchAndons() {
@@ -281,7 +270,6 @@
     counter.style.display = count > 0 ? 'block' : 'none';
 
     // Update the active andon list panel
-    insertAndonPanel();
     activeAndons.sort((a, b) => b.mins - a.mins);
     const alpBody = document.getElementById('alp-body');
     if (alpBody) {
