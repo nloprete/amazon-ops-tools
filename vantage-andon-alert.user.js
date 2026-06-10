@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Vantage - Andon Flash Alert (5min+)
 // @namespace    http://tampermonkey.net/
-// @version      2.0
+// @version      2.1
 // @description  Flashes stations red when Out of Work andons exceed 5 minutes. Department-specific.
 // @updateURL    https://raw.githubusercontent.com/nloprete/amazon-ops-tools/main/vantage-andon-alert.user.js
 // @downloadURL  https://raw.githubusercontent.com/nloprete/amazon-ops-tools/main/vantage-andon-alert.user.js
@@ -34,6 +34,52 @@
     .andon-badge { position: absolute; top: -6px; right: -6px; background: red; color: #fff; font-size: 9px; font-weight: 700; padding: 1px 4px; border-radius: 8px; z-index: 10000; white-space: nowrap; font-family: "Amazon Ember", Arial, sans-serif; }
     .andon-counter { position: fixed; bottom: 12px; left: 12px; z-index: 99999; background: #232f3e; color: #fff; border-radius: 6px; padding: 6px 12px; font-family: "Amazon Ember", Arial, sans-serif; font-size: 12px; border: 2px solid red; box-shadow: 0 2px 8px rgba(0,0,0,0.3); display: none; }
     .andon-counter .ct { color: red; font-weight: 700; font-size: 16px; }
+
+    .andon-list-panel {
+      position: fixed;
+      bottom: 50px;
+      left: 12px;
+      z-index: 99998;
+      background: #232f3e;
+      color: #fff;
+      border-radius: 6px;
+      padding: 8px 12px;
+      font-family: "Amazon Ember", Arial, sans-serif;
+      font-size: 11px;
+      border: 2px solid #ff4d4d;
+      box-shadow: 0 2px 12px rgba(0,0,0,0.4);
+      max-height: 300px;
+      overflow-y: auto;
+      min-width: 220px;
+      display: none;
+    }
+    .andon-list-panel .alp-title {
+      color: #ff4d4d;
+      font-weight: 700;
+      font-size: 12px;
+      margin-bottom: 6px;
+      border-bottom: 1px solid #3a4553;
+      padding-bottom: 4px;
+    }
+    .andon-list-panel .alp-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 3px 0;
+      border-bottom: 1px solid #3a4553;
+    }
+    .andon-list-panel .alp-row:last-child { border-bottom: none; }
+    .andon-list-panel .alp-station {
+      color: #ff9900;
+      font-weight: 700;
+      font-size: 12px;
+    }
+    .andon-list-panel .alp-time {
+      font-weight: 700;
+      font-size: 12px;
+    }
+    .andon-list-panel .alp-time.warn { color: #ff9800; }
+    .andon-list-panel .alp-time.crit { color: #ff0000; }
 
     .dept-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.8); z-index: 9999999; display: flex; align-items: center; justify-content: center; }
     .dept-box { background: #232f3e; border: 2px solid #ff9900; border-radius: 12px; padding: 24px 32px; text-align: center; font-family: "Amazon Ember", Arial, sans-serif; color: #fff; }
@@ -165,6 +211,12 @@
   counter.innerHTML = '<span class="ct" id="ac">0</span> stations 5min+ andon';
   document.body.appendChild(counter);
 
+  // --- Active Andon List Panel ---
+  const andonListPanel = document.createElement('div');
+  andonListPanel.className = 'andon-list-panel';
+  andonListPanel.innerHTML = '<div class="alp-title">⚠️ Active Out of Work Andons</div><div id="alp-body"></div>';
+  document.body.appendChild(andonListPanel);
+
   // --- Fetch & Check ---
   function fetchAndons() {
     const wh = getWarehouse(); const zones = getZones();
@@ -183,11 +235,19 @@
     document.querySelectorAll('.andon-badge').forEach(el => el.remove());
 
     let count = 0;
+    const activeAndons = [];
+
     stations.forEach(s => {
       if (!s.blocking_andons || !s.earliest_andon_time_opened) { alertedStations.delete(s.id); return; }
       const mins = (now - s.earliest_andon_time_opened) / 60;
-      if (mins < ALERT_THRESHOLD) { alertedStations.delete(s.id); return; }
       if (!matchesDept(s)) return;
+
+      // Track ALL active andons for the list (no threshold)
+      if (mins >= 1) {
+        activeAndons.push({ id: s.id, mins });
+      }
+
+      if (mins < ALERT_THRESHOLD) { alertedStations.delete(s.id); return; }
 
       const el = findStation(s.id);
       if (!el) return;
@@ -208,6 +268,26 @@
 
     document.getElementById('ac').textContent = count;
     counter.style.display = count > 0 ? 'block' : 'none';
+
+    // Update the active andon list panel
+    activeAndons.sort((a, b) => b.mins - a.mins);
+    const alpBody = document.getElementById('alp-body');
+    if (alpBody) {
+      if (activeAndons.length === 0) {
+        alpBody.innerHTML = '<div style="color:#78909c;padding:4px 0;">No active andons</div>';
+      } else {
+        alpBody.innerHTML = activeAndons.map(a => {
+          const m = Math.floor(a.mins);
+          const s = Math.floor((a.mins - m) * 60);
+          const timeStr = m + 'm ' + String(s).padStart(2, '0') + 's';
+          const cls = a.mins >= CRITICAL_THRESHOLD ? 'crit' : a.mins >= ALERT_THRESHOLD ? 'warn' : '';
+          return `<div class="alp-row"><span class="alp-station">${a.id}</span><span class="alp-time ${cls}">${timeStr}</span></div>`;
+        }).join('');
+      }
+    }
+    andonListPanel.style.display = activeAndons.length > 0 ? 'block' : 'none';
+    const titleEl = andonListPanel.querySelector('.alp-title');
+    if (titleEl) titleEl.textContent = `⚠️ Active Out of Work Andons (${activeAndons.length})`;
   }
 
   // --- Init ---
