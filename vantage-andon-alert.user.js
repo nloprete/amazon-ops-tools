@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Vantage - Andon Flash Alert (5min+)
 // @namespace    http://tampermonkey.net/
-// @version      2.4
+// @version      2.5
 // @description  Flashes stations red when Out of Work andons exceed 5 minutes. Department-specific.
 // @updateURL    https://raw.githubusercontent.com/nloprete/amazon-ops-tools/main/vantage-andon-alert.user.js
 // @downloadURL  https://raw.githubusercontent.com/nloprete/amazon-ops-tools/main/vantage-andon-alert.user.js
@@ -212,10 +212,12 @@
   document.body.appendChild(counter);
 
   // --- Active Andon List Panel ---
+  console.log('[Andon] Creating panel...');
   const andonListPanel = document.createElement('div');
   andonListPanel.className = 'andon-list-panel';
   andonListPanel.innerHTML = '<div class="alp-title">⚠️ Out of Work Andons</div><div id="alp-body"></div>';
   document.body.appendChild(andonListPanel);
+  console.log('[Andon] Panel appended:', andonListPanel.parentElement === document.body);
 
   // --- Fetch & Check ---
   function fetchAndons() {
