@@ -222,7 +222,7 @@
           <div class="vp-total-row"><span class="vp-label">EOS Total</span><span class="vp-total-value" style="color:#69f0ae;" id="vp-total-bc">...</span></div>
         </div>
         <div style="flex:1;border-left:1px solid #3a4553;padding-left:16px;">
-          <div style="color:#4fc3f7;font-weight:700;font-size:11px;text-align:center;margin-bottom:6px;">EXPECTED</div>
+          <div style="color:#4fc3f7;font-weight:700;font-size:11px;text-align:center;margin-bottom:6px;">CURRENT CONDITIONS</div>
           <div class="vp-row"><span class="vp-label">Stations (HC)</span><span class="vp-value" id="vp-stations">...</span></div>
           <div class="vp-row"><span class="vp-label">ETI Rate</span><span class="vp-value" id="vp-eti">...</span></div>
           <div class="vp-row"><span class="vp-label">Hrs Elapsed</span><span class="vp-value" id="vp-elapsed">...</span></div>
