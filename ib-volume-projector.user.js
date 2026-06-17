@@ -204,7 +204,7 @@
     const panel = document.createElement('div');
     panel.className = 'vol-proj-panel';
     panel.innerHTML = `
-      <div class="vp-title">📊 Volume Projector</div>
+      <div class="vp-title">📊 Volume Projector <button id="vp-minimize" style="float:right;background:none;border:none;color:#aab7c4;font-size:14px;cursor:pointer;padding:0 4px;font-family:'Amazon Ember',Arial,sans-serif;">▲</button></div>
       <div style="display:flex;gap:16px;">
         <div style="flex:1;">
           <div style="color:#69f0ae;font-weight:700;font-size:11px;text-align:center;margin-bottom:6px;">BEST CASE (+5%)</div>
@@ -303,6 +303,29 @@
     goalInput.addEventListener('input', () => {
       localStorage.setItem('vp_volume_goal', goalInput.value);
       updatePanel();
+    });
+
+    // Minimize toggle
+    const minBtn = panel.querySelector('#vp-minimize');
+    const panelBody = panel.querySelector('#vp-minimize').parentElement.nextElementSibling ? null : null;
+    let minimized = localStorage.getItem('vp_minimized') === 'true';
+
+    function applyMinimize() {
+      const children = [...panel.children];
+      children.forEach((child, i) => {
+        if (i === 0) return; // keep title bar visible
+        child.style.display = minimized ? 'none' : '';
+      });
+      minBtn.textContent = minimized ? '▼' : '▲';
+    }
+
+    if (minimized) applyMinimize();
+
+    minBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      minimized = !minimized;
+      localStorage.setItem('vp_minimized', minimized);
+      applyMinimize();
     });
   }
 
