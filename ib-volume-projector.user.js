@@ -27,9 +27,19 @@
       font-family: "Amazon Ember", Arial, sans-serif;
       border: 2px solid #4fc3f7;
       box-shadow: 0 4px 20px rgba(0,0,0,0.4);
-      min-width: 280px;
+      min-width: 650px;
       resize: both;
       overflow: auto;
+    }
+    .vol-proj-panel.minimized {
+      min-width: unset;
+      width: auto;
+      padding: 8px 14px;
+      resize: none;
+      overflow: hidden;
+    }
+    .vol-proj-panel.minimized .vp-body {
+      display: none;
     }
     .vol-proj-panel .vp-title {
       color: #4fc3f7;
@@ -204,7 +214,8 @@
     const panel = document.createElement('div');
     panel.className = 'vol-proj-panel';
     panel.innerHTML = `
-      <div class="vp-title">📊 Volume Projector <button id="vp-minimize" style="float:right;background:none;border:none;color:#aab7c4;font-size:14px;cursor:pointer;padding:0 4px;font-family:'Amazon Ember',Arial,sans-serif;">▲</button></div>
+      <div class="vp-title">📊 Volume Projector <button id="vp-minimize" style="float:right;background:none;border:none;color:#aab7c4;font-size:14px;cursor:pointer;padding:0 4px;font-family:'Amazon Ember',Arial,sans-serif;">—</button></div>
+      <div class="vp-body">
       <div style="display:flex;gap:16px;">
         <div style="flex:1;">
           <div style="color:#69f0ae;font-weight:700;font-size:11px;text-align:center;margin-bottom:6px;">BEST CASE (+5%)</div>
@@ -269,6 +280,7 @@
       <div class="vp-row"><span class="vp-label">Yesterday at this point</span><span class="vp-value" id="vp-hist-yesterday">—</span></div>
       <div class="vp-row"><span class="vp-label">Last week avg at this point</span><span class="vp-value" id="vp-hist-week">—</span></div>
       <div class="vp-timestamp" id="vp-timestamp"></div>
+      </div>
     `;
     document.body.appendChild(panel);
 
@@ -307,16 +319,11 @@
 
     // Minimize toggle
     const minBtn = panel.querySelector('#vp-minimize');
-    const panelBody = panel.querySelector('#vp-minimize').parentElement.nextElementSibling ? null : null;
     let minimized = localStorage.getItem('vp_minimized') === 'true';
 
     function applyMinimize() {
-      const children = [...panel.children];
-      children.forEach((child, i) => {
-        if (i === 0) return; // keep title bar visible
-        child.style.display = minimized ? 'none' : '';
-      });
-      minBtn.textContent = minimized ? '▼' : '▲';
+      panel.classList.toggle('minimized', minimized);
+      minBtn.textContent = minimized ? '□' : '—';
     }
 
     if (minimized) applyMinimize();
