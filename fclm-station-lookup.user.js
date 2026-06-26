@@ -32,7 +32,7 @@
       padding: 8px 12px;
       font-family: "Amazon Ember", Arial, sans-serif;
       box-shadow: 0 4px 16px rgba(0,0,0,0.3);
-      width: 320px;
+      width: 380px;
       max-height: 80vh;
       border: 2px solid #ff9900;
       display: flex;
@@ -80,13 +80,14 @@
       border: 1px solid #ff9900;
       color: #fff;
       border-radius: 4px;
-      padding: 4px 6px;
+      padding: 6px 8px;
       width: 100%;
-      font-size: 11px;
+      font-size: 14px;
       font-family: "Amazon Ember", Arial, sans-serif;
       resize: vertical;
-      min-height: 80px;
+      min-height: 120px;
       box-sizing: border-box;
+      line-height: 1.5;
     }
     .sl-input::placeholder { color: #78909c; }
     .sl-input:focus { outline: none; border-color: #ffb74d; background: #455a64; }
