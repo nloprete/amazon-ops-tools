@@ -357,16 +357,11 @@
 
     const savedLogins = GM_getValue('sl_logins', '');
     const minimized = GM_getValue('sl_minimized', false);
-    const savedLeft = GM_getValue('sl_pos_left', '');
-    const savedTop = GM_getValue('sl_pos_top', '');
 
     const panel = document.createElement('div');
     panel.className = `sl-panel${minimized ? ' minimized' : ''}`;
-    if (savedLeft && savedTop) {
-      panel.style.left = savedLeft;
-      panel.style.top = savedTop;
-      panel.style.right = 'auto';
-    }
+    panel.style.top = '60px';
+    panel.style.right = '12px';
     panel.innerHTML = `
       <div class="sl-title">
         📍 Station Lookup
@@ -390,35 +385,7 @@
       GM_setValue('sl_minimized', isMin);
     });
 
-    // Drag
-    const titleBar = panel.querySelector('.sl-title');
-    let isDragging = false, offsetX = 0, offsetY = 0;
-
-    titleBar.addEventListener('mousedown', (e) => {
-      if (e.target.classList.contains('sl-minimize-btn')) return;
-      isDragging = true;
-      offsetX = e.clientX - panel.getBoundingClientRect().left;
-      offsetY = e.clientY - panel.getBoundingClientRect().top;
-      panel.style.right = 'auto';
-      e.preventDefault();
-      e.stopPropagation();
-    }, true);
-
-    window.addEventListener('mousemove', (e) => {
-      if (!isDragging) return;
-      e.preventDefault();
-      e.stopPropagation();
-      panel.style.left = Math.max(0, e.clientX - offsetX) + 'px';
-      panel.style.top = Math.max(0, e.clientY - offsetY) + 'px';
-    }, true);
-
-    window.addEventListener('mouseup', () => {
-      if (isDragging) {
-        isDragging = false;
-        GM_setValue('sl_pos_left', panel.style.left);
-        GM_setValue('sl_pos_top', panel.style.top);
-      }
-    }, true);
+    // Panel is fixed in top-right — no dragging
 
     // Search
     document.getElementById('sl-search').addEventListener('click', doSearch);
