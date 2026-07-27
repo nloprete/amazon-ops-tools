@@ -60,12 +60,20 @@
       border: none;
       color: #aab7c4;
       cursor: pointer;
-      font-size: 11px;
-      padding: 0 3px;
+      font-size: 16px;
+      padding: 0 5px;
       margin-left: auto;
+      line-height: 1;
     }
     .sl-minimize-btn:hover { color: #fff; }
     .sl-panel.minimized .sl-body { display: none; }
+    .sl-panel.minimized {
+      width: auto;
+      min-width: unset;
+      max-height: unset;
+      padding: 6px 12px;
+      resize: none;
+    }
 
     .sl-body {
       display: flex;
@@ -365,7 +373,7 @@
     panel.innerHTML = `
       <div class="sl-title">
         📍 Station Lookup
-        <button class="sl-minimize-btn">${minimized ? '▼' : '▲'}</button>
+        <button class="sl-minimize-btn">${minimized ? '□' : '—'}</button>
       </div>
       <div class="sl-body">
         <textarea class="sl-input" id="sl-logins" placeholder="Paste logins (one per line, comma, or space separated)">${savedLogins}</textarea>
@@ -381,7 +389,7 @@
     panel.querySelector('.sl-minimize-btn').addEventListener('click', () => {
       panel.classList.toggle('minimized');
       const isMin = panel.classList.contains('minimized');
-      panel.querySelector('.sl-minimize-btn').textContent = isMin ? '▼' : '▲';
+      panel.querySelector('.sl-minimize-btn').textContent = isMin ? '□' : '—';
       GM_setValue('sl_minimized', isMin);
     });
 
