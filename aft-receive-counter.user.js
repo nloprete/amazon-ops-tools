@@ -6,6 +6,7 @@
 // @updateURL    https://raw.githubusercontent.com/nloprete/amazon-ops-tools/main/aft-receive-counter.user.js
 // @downloadURL  https://raw.githubusercontent.com/nloprete/amazon-ops-tools/main/aft-receive-counter.user.js
 // @match        https://afttransshipmenthub-na.aka.amazon.com/*/view-transfers/inbound*
+// @connect      nyr.chaces.amazon.dev
 // @connect      maple-syrup.corp.amazon.com
 // @grant        GM_addStyle
 // @grant        GM_xmlhttpRequest
@@ -378,7 +379,65 @@
     checkMissingTrailers(loads);
   }
 
-  // --- KIPS cross-reference ---
+  // --- NYR + KIPS cross-reference ---
+  function fetchNYR() {
+    return new Promise((resolve) => {
+      GM_xmlhttpRequest({
+        method: 'GET',
+        url: 'https://nyr.chaces.amazon.dev/fc/RIC4',
+        withCredentials: true,
+        onload: (resp) => {
+          const html = resp.responseText || '';
+          const trailers = [];
+          // Parse rows — green rows (received) have background-color green or class indicating received
+          const parser = new DOMParser();
+          const doc = parser.parseFromString(html, 'text/html');
+          const rows = doc.querySelectorAll('tr');
+          rows.forEach(row => {
+            const style = row.getAttribute('style') || '';
+            const cls = row.className || '';
+            const bgColor = row.style?.backgroundColor || '';
+            // Check if row is green (received)
+            const isGreen = /green|#[0-9a-f]*[4-9a-f][0-9a-f]*[4-9a-f]/i.test(style + bgColor + cls) ||
+                            row.querySelector('td[style*="green"], td[class*="green"]') !== null ||
+                            /background[^;]*#[0-9a-f]*[4-9a-f]{2}/i.test(style);
+
+            // Also check individual cell highlighting
+            const cells = row.querySelectorAll('td');
+            let rowIsGreen = isGreen;
+            cells.forEach(cell => {
+              const cs = cell.getAttribute('style') || '';
+              if (/background[^;]*(green|#[89a-f][0-9a-f]ff|#[4-9a-f]{2}[4-9a-f]{2})/i.test(cs)) {
+                rowIsGreen = true;
+              }
+            });
+
+            if (rowIsGreen && cells.length >= 5) {
+              // Extract trailer ID (typically column 4 based on the screenshot)
+              const trailerId = cells[3]?.textContent.trim() || cells[4]?.textContent.trim();
+              const sourceFC = cells[1]?.textContent.trim();
+              const units = parseInt((cells[4]?.textContent || cells[5]?.textContent || '').replace(/,/g, ''), 10) || 0;
+              // Look for a date/time in the row
+              let receivedTime = null;
+              cells.forEach(cell => {
+                const t = cell.textContent.trim();
+                if (/\d{1,2}\/\d{1,2}\/\d{2,4}/.test(t) || /\d{4}-\d{2}-\d{2}/.test(t)) {
+                  const d = new Date(t);
+                  if (!isNaN(d.getTime()) && !receivedTime) receivedTime = d;
+                }
+              });
+              if (trailerId && /^[A-Z0-9]{6,}$/i.test(trailerId)) {
+                trailers.push({ trailerId, sourceFC, units, source: 'NYR', receivedTime });
+              }
+            }
+          });
+          resolve(trailers);
+        },
+        onerror: () => resolve([]),
+      });
+    });
+  }
+
   function fetchKIPS() {
     return new Promise((resolve) => {
       GM_xmlhttpRequest({
@@ -390,54 +449,23 @@
           const trailers = [];
           const parser = new DOMParser();
           const doc = parser.parseFromString(html, 'text/html');
-          const allRows = doc.querySelectorAll('tr');
-
-          // Log first row to debug
-          console.log('[KIPS] Total rows:', allRows.length);
-
-          allRows.forEach(row => {
+          const rows = doc.querySelectorAll('tr');
+          rows.forEach(row => {
             const cells = row.querySelectorAll('td');
-            if (cells.length < 5) return;
-
-            // Read all cell values
-            const cellTexts = [];
-            cells.forEach(c => cellTexts.push(c.textContent.trim()));
-
-            // Find the trailer ID — it's the cell that looks like a VRID (alphanumeric, 8-12 chars)
-            let trailerId = '';
-            let sourceFC = '';
+            if (cells.length < 4) return;
+            const sourceFC = cells[0]?.textContent.trim();
+            const trailerId = cells[1]?.textContent.trim().replace(/[^\w]/g, '');
+            // Received time is typically column 3 (index 3)
             let receivedTime = null;
-            let qty = 0;
-
-            cellTexts.forEach((text, idx) => {
-              const clean = text.replace(/\s+/g, '');
-              // Source FC: 2-4 uppercase letters + 0-2 digits (like XJF1, RIC7, HGR5)
-              if (/^[A-Z]{2,4}\d{0,2}$/.test(clean) && !sourceFC) {
-                sourceFC = clean;
-              }
-              // Trailer ID: 8+ alphanumeric chars (like 1155HL1RR, 114FW5ZZ8)
-              else if (/^[A-Z0-9]{8,}$/i.test(clean) && !trailerId) {
-                trailerId = clean;
-              }
-              // Date: contains year pattern
-              else if (/\d{4}-\d{2}-\d{2}/.test(text) && !receivedTime) {
-                const d = new Date(text);
-                if (!isNaN(d.getTime())) receivedTime = d;
-              }
-            });
-
-            // Find qty: column 6 is Org. Unit Count on KIPS
-            if (cells.length > 6) {
-              const qtyText = cells[6]?.textContent.trim().replace(/[^0-9]/g, '');
-              qty = parseInt(qtyText, 10) || 0;
+            const timeText = cells[3]?.textContent.trim();
+            if (timeText) {
+              const d = new Date(timeText);
+              if (!isNaN(d.getTime())) receivedTime = d;
             }
-
-            if (trailerId && sourceFC) {
-              trailers.push({ trailerId, sourceFC, qty, source: 'KIPS', receivedTime });
+            if (sourceFC && /^[A-Z]{2,4}\d{0,2}$/.test(sourceFC) && trailerId) {
+              trailers.push({ trailerId, sourceFC, units: 0, source: 'KIPS', receivedTime });
             }
           });
-
-          console.log('[KIPS] Parsed trailers:', trailers.length, trailers.slice(0, 3));
           resolve(trailers);
         },
         onerror: () => resolve([]),
@@ -450,36 +478,38 @@
     const missingCountEl = document.getElementById('aft-missing-count');
     if (!missingSection) return;
 
-    missingSection.innerHTML = '<div style="color:#78909c;padding:8px;text-align:center;">⏳ Checking KIPS...</div>';
+    missingSection.innerHTML = '<div style="color:#78909c;padding:8px;text-align:center;">⏳ Checking NYR & KIPS...</div>';
 
-    // Get AFT load IDs from the current table
-    const aftIds = new Set(aftLoads.map(l => l.loadId.toUpperCase().replace(/[^A-Z0-9]/g, '')));
+    // Get AFT trailer IDs (load IDs from the current table)
+    const aftIds = new Set(aftLoads.map(l => l.loadId.toUpperCase()));
 
-    // Fetch KIPS and filter by the current date/time range
-    const { start, end } = getShiftWindow();
-    const kipsTrailers = await fetchKIPS();
-    const kipsInRange = kipsTrailers.filter(t => {
-      if (!t.receivedTime) return false;
-      return t.receivedTime >= start && t.receivedTime < end;
-    });
+    // Fetch NYR and KIPS in parallel
+    const [nyrTrailers, kipsTrailers] = await Promise.all([fetchNYR(), fetchKIPS()]);
 
-    // Find trailers on KIPS (in range) but NOT in AFT
-    // KIPS may append source FC or "AFT" to the ID, so we try multiple match strategies
-    const missing = kipsInRange.filter(t => {
-      const kipsId = t.trailerId.toUpperCase().replace(/[^A-Z0-9]/g, '');
-      // Direct match
-      if (aftIds.has(kipsId)) return false;
-      // Try stripping common suffixes (AFT, source FC codes)
-      const stripped = kipsId.replace(/(AFT|RIC4|RIC7|XJF1|XMD3|AVP0|AVP1|HGR5|MQJ1|ORF2|ORF7|MDT4|ABE8)$/i, '');
-      if (aftIds.has(stripped)) return false;
-      // Try matching if AFT ID is contained within KIPS ID
-      for (const aftId of aftIds) {
-        if (kipsId.includes(aftId) || aftId.includes(kipsId)) return false;
+    // Find trailers that are on NYR (green/received) or KIPS but NOT in AFT
+    const missing = [];
+    const seenIds = new Set();
+
+    nyrTrailers.forEach(t => {
+      const id = t.trailerId.toUpperCase();
+      if (!aftIds.has(id) && !seenIds.has(id)) {
+        seenIds.add(id);
+        missing.push(t);
       }
-      return true;
     });
 
-    // Sort by received time (most recent first)
+    kipsTrailers.forEach(t => {
+      const id = t.trailerId.toUpperCase();
+      if (!aftIds.has(id) && !seenIds.has(id)) {
+        seenIds.add(id);
+        missing.push(t);
+      }
+    });
+
+    // Update the missing count
+    if (missingCountEl) missingCountEl.textContent = missing.length;
+
+    // Render missing trailers (sorted by received time)
     missing.sort((a, b) => {
       if (!a.receivedTime && !b.receivedTime) return 0;
       if (!a.receivedTime) return 1;
@@ -487,24 +517,17 @@
       return b.receivedTime - a.receivedTime;
     });
 
-    // Update the missing count
-    if (missingCountEl) missingCountEl.textContent = missing.length;
-
-    // Render missing trailers
     if (missing.length > 0) {
-      let html = '<div style="color:#ff5252;font-weight:700;font-size:13px;margin-bottom:8px;border-bottom:2px solid #ff5252;padding-bottom:6px;">⚠️ On KIPS, not in AFT (' + missing.length + ')</div>';
-      html += '<table style="width:100%;border-collapse:collapse;"><thead><tr><th style="background:#3a4553;color:#ff5252;padding:3px 5px;text-align:left;font-size:10px;">VRID</th><th style="background:#3a4553;color:#ff5252;padding:3px 5px;text-align:left;font-size:10px;">Source</th><th style="background:#3a4553;color:#ff5252;padding:3px 5px;text-align:left;font-size:10px;">Received</th><th style="background:#3a4553;color:#ff5252;padding:3px 5px;text-align:right;font-size:10px;">Qty</th></tr></thead><tbody>';
+      let html = '<div style="color:#ff5252;font-weight:700;font-size:13px;margin-bottom:8px;border-bottom:2px solid #ff5252;padding-bottom:6px;">⚠️ Missing from AFT (' + missing.length + ')</div>';
+      html += '<table style="width:100%;border-collapse:collapse;"><thead><tr><th style="background:#3a4553;color:#ff5252;padding:3px 5px;text-align:left;font-size:10px;">Trailer</th><th style="background:#3a4553;color:#ff5252;padding:3px 5px;text-align:left;font-size:10px;">Source</th><th style="background:#3a4553;color:#ff5252;padding:3px 5px;text-align:left;font-size:10px;">Received</th><th style="background:#3a4553;color:#ff5252;padding:3px 5px;text-align:left;font-size:10px;">Found On</th></tr></thead><tbody>';
       missing.forEach(t => {
         const timeStr = t.receivedTime ? t.receivedTime.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—';
-        html += `<tr><td style="padding:2px 5px;border-bottom:1px solid #3a4553;color:#ff9900;font-weight:600;">${t.trailerId}</td><td style="padding:2px 5px;border-bottom:1px solid #3a4553;color:#aab7c4;">${t.sourceFC || '—'}</td><td style="padding:2px 5px;border-bottom:1px solid #3a4553;color:#aab7c4;font-size:10px;">${timeStr}</td><td style="padding:2px 5px;border-bottom:1px solid #3a4553;color:#69f0ae;font-weight:700;text-align:right;">${t.qty ? t.qty.toLocaleString() : '—'}</td></tr>`;
+        html += `<tr><td style="padding:2px 5px;border-bottom:1px solid #3a4553;color:#ff9900;font-weight:600;">${t.trailerId}</td><td style="padding:2px 5px;border-bottom:1px solid #3a4553;color:#aab7c4;">${t.sourceFC || '—'}</td><td style="padding:2px 5px;border-bottom:1px solid #3a4553;color:#aab7c4;font-size:10px;">${timeStr}</td><td style="padding:2px 5px;border-bottom:1px solid #3a4553;color:${t.source === 'NYR' ? '#4fc3f7' : '#ff9800'};">${t.source}</td></tr>`;
       });
       html += '</tbody></table>';
-      // Total missing qty
-      const totalMissingQty = missing.reduce((sum, t) => sum + (t.qty || 0), 0);
-      html += `<div style="margin-top:6px;padding-top:4px;border-top:1px solid #3a4553;color:#ff5252;font-weight:700;font-size:12px;text-align:right;">Missing Qty: ${totalMissingQty.toLocaleString()}</div>`;
       missingSection.innerHTML = html;
     } else {
-      missingSection.innerHTML = '<div style="color:#69f0ae;padding:8px;text-align:center;font-weight:700;">✓ All KIPS trailers accounted for</div>';
+      missingSection.innerHTML = '<div style="color:#69f0ae;padding:8px;text-align:center;font-weight:700;">✓ No missing trailers</div>';
     }
   }
 
