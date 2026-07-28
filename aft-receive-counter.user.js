@@ -6,7 +6,10 @@
 // @updateURL    https://raw.githubusercontent.com/nloprete/amazon-ops-tools/main/aft-receive-counter.user.js
 // @downloadURL  https://raw.githubusercontent.com/nloprete/amazon-ops-tools/main/aft-receive-counter.user.js
 // @match        https://afttransshipmenthub-na.aka.amazon.com/*/view-transfers/inbound*
+// @connect      nyr.chaces.amazon.dev
+// @connect      maple-syrup.corp.amazon.com
 // @grant        GM_addStyle
+// @grant        GM_xmlhttpRequest
 // ==/UserScript==
 
 (function () {
@@ -24,14 +27,14 @@
       padding: 10px 14px;
       font-family: "Amazon Ember", Arial, sans-serif;
       box-shadow: 0 4px 16px rgba(0,0,0,0.3);
-      width: 880px;
+      width: 820px;
       max-height: 80vh;
       border: 2px solid #ff9900;
       display: flex;
       flex-direction: column;
-      resize: none;
+      resize: both;
       overflow: hidden;
-      min-width: 500px;
+      min-width: 700px;
       min-height: 150px;
     }
     .aft-title {
@@ -254,7 +257,7 @@
     const defaults = getDefaultTimes();
     const panel = document.createElement('div');
     panel.className = 'aft-panel';
-    panel.innerHTML = '<div class="aft-title">📦 Daily Receive<button class="aft-min-btn">▲</button></div><div class="aft-body"><div class="aft-inputs"><label>From:</label><input type="datetime-local" class="aft-input" id="aft-start" value="' + defaults.startStr + '"><label>To:</label><input type="datetime-local" class="aft-input" id="aft-end" value="' + defaults.endStr + '"></div><div class="aft-summary"><div class="aft-stat"><div class="val" id="aft-total">...</div><div class="lbl">TOTAL QTY</div></div><div class="aft-stat"><div class="val" id="aft-loads" style="color:#4fc3f7">...</div><div class="lbl">LOADS</div></div></div><div style="display:flex;gap:24px;flex:1;min-height:0;overflow:hidden;"><div id="aft-hourly-section" style="flex:1;overflow-y:auto;min-width:0;"></div><div id="aft-results" style="flex:1;overflow-y:auto;min-width:0;"></div></div><button class="aft-refresh" id="aft-refresh">↻ Refresh</button><div class="aft-time-range" id="aft-range"></div></div>';
+    panel.innerHTML = '<div class="aft-title">📦 Daily Receive<button class="aft-min-btn">▲</button></div><div class="aft-body"><div class="aft-inputs"><label>From:</label><input type="datetime-local" class="aft-input" id="aft-start" value="' + defaults.startStr + '"><label>To:</label><input type="datetime-local" class="aft-input" id="aft-end" value="' + defaults.endStr + '"></div><div class="aft-summary"><div class="aft-stat"><div class="val" id="aft-total">...</div><div class="lbl">TOTAL QTY</div></div><div class="aft-stat"><div class="val" id="aft-loads" style="color:#4fc3f7">...</div><div class="lbl">LOADS</div></div><div class="aft-stat"><div class="val" id="aft-missing-count" style="color:#ff5252">...</div><div class="lbl">MISSING</div></div></div><div style="display:flex;gap:24px;flex:1;min-height:0;overflow:hidden;"><div id="aft-hourly-section" style="flex:1;overflow-y:auto;min-width:0;"></div><div id="aft-results" style="flex:1;overflow-y:auto;min-width:0;"></div><div id="aft-missing-section" style="flex:1;overflow-y:auto;min-width:0;"></div></div><button class="aft-refresh" id="aft-refresh">↻ Refresh</button><div class="aft-time-range" id="aft-range"></div></div>';
     document.body.appendChild(panel);
 
     panel.querySelector('.aft-min-btn').addEventListener('click', () => {
@@ -371,6 +374,137 @@
 
     const fmt = d => d.toLocaleDateString() + ' 3:00 AM';
     document.getElementById('aft-range').textContent = fmt(start) + ' → ' + fmt(end);
+
+    // Fetch NYR and KIPS to find missing trailers
+    checkMissingTrailers(loads);
+  }
+
+  // --- NYR + KIPS cross-reference ---
+  function fetchNYR() {
+    return new Promise((resolve) => {
+      GM_xmlhttpRequest({
+        method: 'GET',
+        url: 'https://nyr.chaces.amazon.dev/fc/RIC4',
+        withCredentials: true,
+        onload: (resp) => {
+          const html = resp.responseText || '';
+          const trailers = [];
+          // Parse rows — green rows (received) have background-color green or class indicating received
+          const parser = new DOMParser();
+          const doc = parser.parseFromString(html, 'text/html');
+          const rows = doc.querySelectorAll('tr');
+          rows.forEach(row => {
+            const style = row.getAttribute('style') || '';
+            const cls = row.className || '';
+            const bgColor = row.style?.backgroundColor || '';
+            // Check if row is green (received)
+            const isGreen = /green|#[0-9a-f]*[4-9a-f][0-9a-f]*[4-9a-f]/i.test(style + bgColor + cls) ||
+                            row.querySelector('td[style*="green"], td[class*="green"]') !== null ||
+                            /background[^;]*#[0-9a-f]*[4-9a-f]{2}/i.test(style);
+
+            // Also check individual cell highlighting
+            const cells = row.querySelectorAll('td');
+            let rowIsGreen = isGreen;
+            cells.forEach(cell => {
+              const cs = cell.getAttribute('style') || '';
+              if (/background[^;]*(green|#[89a-f][0-9a-f]ff|#[4-9a-f]{2}[4-9a-f]{2})/i.test(cs)) {
+                rowIsGreen = true;
+              }
+            });
+
+            if (rowIsGreen && cells.length >= 5) {
+              // Extract trailer ID (typically column 4 based on the screenshot)
+              const trailerId = cells[3]?.textContent.trim() || cells[4]?.textContent.trim();
+              const sourceFC = cells[1]?.textContent.trim();
+              const units = parseInt((cells[4]?.textContent || cells[5]?.textContent || '').replace(/,/g, ''), 10) || 0;
+              if (trailerId && /^[A-Z0-9]{6,}$/i.test(trailerId)) {
+                trailers.push({ trailerId, sourceFC, units, source: 'NYR' });
+              }
+            }
+          });
+          resolve(trailers);
+        },
+        onerror: () => resolve([]),
+      });
+    });
+  }
+
+  function fetchKIPS() {
+    return new Promise((resolve) => {
+      GM_xmlhttpRequest({
+        method: 'GET',
+        url: 'https://maple-syrup.corp.amazon.com/RIC4/kips/thermometer',
+        withCredentials: true,
+        onload: (resp) => {
+          const html = resp.responseText || '';
+          const trailers = [];
+          const parser = new DOMParser();
+          const doc = parser.parseFromString(html, 'text/html');
+          const rows = doc.querySelectorAll('tr');
+          rows.forEach(row => {
+            const cells = row.querySelectorAll('td');
+            if (cells.length < 4) return;
+            const sourceFC = cells[0]?.textContent.trim();
+            const trailerId = cells[1]?.textContent.trim().replace(/[^\w]/g, '');
+            if (sourceFC && /^[A-Z]{2,4}\d{0,2}$/.test(sourceFC) && trailerId) {
+              trailers.push({ trailerId, sourceFC, units: 0, source: 'KIPS' });
+            }
+          });
+          resolve(trailers);
+        },
+        onerror: () => resolve([]),
+      });
+    });
+  }
+
+  async function checkMissingTrailers(aftLoads) {
+    const missingSection = document.getElementById('aft-missing-section');
+    const missingCountEl = document.getElementById('aft-missing-count');
+    if (!missingSection) return;
+
+    missingSection.innerHTML = '<div style="color:#78909c;padding:8px;text-align:center;">⏳ Checking NYR & KIPS...</div>';
+
+    // Get AFT trailer IDs (load IDs from the current table)
+    const aftIds = new Set(aftLoads.map(l => l.loadId.toUpperCase()));
+
+    // Fetch NYR and KIPS in parallel
+    const [nyrTrailers, kipsTrailers] = await Promise.all([fetchNYR(), fetchKIPS()]);
+
+    // Find trailers that are on NYR (green/received) or KIPS but NOT in AFT
+    const missing = [];
+    const seenIds = new Set();
+
+    nyrTrailers.forEach(t => {
+      const id = t.trailerId.toUpperCase();
+      if (!aftIds.has(id) && !seenIds.has(id)) {
+        seenIds.add(id);
+        missing.push(t);
+      }
+    });
+
+    kipsTrailers.forEach(t => {
+      const id = t.trailerId.toUpperCase();
+      if (!aftIds.has(id) && !seenIds.has(id)) {
+        seenIds.add(id);
+        missing.push(t);
+      }
+    });
+
+    // Update the missing count
+    if (missingCountEl) missingCountEl.textContent = missing.length;
+
+    // Render missing trailers
+    if (missing.length > 0) {
+      let html = '<div style="color:#ff5252;font-weight:700;font-size:13px;margin-bottom:8px;border-bottom:2px solid #ff5252;padding-bottom:6px;">⚠️ Missing from AFT (' + missing.length + ')</div>';
+      html += '<table style="width:100%;border-collapse:collapse;"><thead><tr><th style="background:#3a4553;color:#ff5252;padding:3px 5px;text-align:left;font-size:10px;">Trailer</th><th style="background:#3a4553;color:#ff5252;padding:3px 5px;text-align:left;font-size:10px;">Source</th><th style="background:#3a4553;color:#ff5252;padding:3px 5px;text-align:left;font-size:10px;">Found On</th></tr></thead><tbody>';
+      missing.forEach(t => {
+        html += `<tr><td style="padding:2px 5px;border-bottom:1px solid #3a4553;color:#ff9900;font-weight:600;">${t.trailerId}</td><td style="padding:2px 5px;border-bottom:1px solid #3a4553;color:#aab7c4;">${t.sourceFC || '—'}</td><td style="padding:2px 5px;border-bottom:1px solid #3a4553;color:${t.source === 'NYR' ? '#4fc3f7' : '#ff9800'};">${t.source}</td></tr>`;
+      });
+      html += '</tbody></table>';
+      missingSection.innerHTML = html;
+    } else {
+      missingSection.innerHTML = '<div style="color:#69f0ae;padding:8px;text-align:center;font-weight:700;">✓ No missing trailers</div>';
+    }
   }
 
   function init() {
@@ -420,7 +554,5 @@
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
   else init();
 })();
-
-
 
 
