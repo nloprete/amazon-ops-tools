@@ -24,7 +24,7 @@
       padding: 10px 14px;
       font-family: "Amazon Ember", Arial, sans-serif;
       box-shadow: 0 4px 16px rgba(0,0,0,0.3);
-      width: 700px;
+      width: 820px;
       max-height: 80vh;
       border: 2px solid #ff9900;
       display: flex;
@@ -254,7 +254,7 @@
     const defaults = getDefaultTimes();
     const panel = document.createElement('div');
     panel.className = 'aft-panel';
-    panel.innerHTML = '<div class="aft-title">📦 Daily Receive<button class="aft-min-btn">▲</button></div><div class="aft-body"><div class="aft-inputs"><label>From:</label><input type="datetime-local" class="aft-input" id="aft-start" value="' + defaults.startStr + '"><label>To:</label><input type="datetime-local" class="aft-input" id="aft-end" value="' + defaults.endStr + '"></div><div class="aft-summary"><div class="aft-stat"><div class="val" id="aft-total">...</div><div class="lbl">TOTAL QTY</div></div><div class="aft-stat"><div class="val" id="aft-loads" style="color:#4fc3f7">...</div><div class="lbl">LOADS</div></div></div><div class="aft-results" id="aft-results"></div><button class="aft-refresh" id="aft-refresh">↻ Refresh</button><div class="aft-time-range" id="aft-range"></div></div>';
+    panel.innerHTML = '<div class="aft-title">📦 Daily Receive<button class="aft-min-btn">▲</button></div><div class="aft-body"><div class="aft-inputs"><label>From:</label><input type="datetime-local" class="aft-input" id="aft-start" value="' + defaults.startStr + '"><label>To:</label><input type="datetime-local" class="aft-input" id="aft-end" value="' + defaults.endStr + '"></div><div class="aft-summary"><div class="aft-stat"><div class="val" id="aft-total">...</div><div class="lbl">TOTAL QTY</div></div><div class="aft-stat"><div class="val" id="aft-loads" style="color:#4fc3f7">...</div><div class="lbl">LOADS</div></div></div><div style="display:flex;gap:12px;flex:1;min-height:0;overflow:hidden;"><div id="aft-hourly-section" style="flex:1;overflow-y:auto;min-width:0;"></div><div id="aft-results" style="flex:1;overflow-y:auto;min-width:0;"></div></div><button class="aft-refresh" id="aft-refresh">↻ Refresh</button><div class="aft-time-range" id="aft-range"></div></div>';
     document.body.appendChild(panel);
 
     panel.querySelector('.aft-min-btn').addEventListener('click', () => {
@@ -304,13 +304,8 @@
       ? '<table><thead><tr><th>VRID</th><th>Received</th><th>Qty</th></tr></thead><tbody>' + rows + '</tbody></table>'
       : '<div style="color:#78909c;padding:8px;text-align:center">No loads found in window</div>';
 
-    // Hourly breakdown — inside the main panel
-    let hourlySection = document.getElementById('aft-hourly-section');
-    if (!hourlySection) {
-      hourlySection = document.createElement('div');
-      hourlySection.id = 'aft-hourly-section';
-      document.getElementById('aft-results').after(hourlySection);
-    }
+    // Hourly breakdown — left column
+    const hourlySection = document.getElementById('aft-hourly-section');
 
     const hourlyMap = {};
     loads.forEach(l => {
@@ -425,3 +420,4 @@
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
   else init();
 })();
+
