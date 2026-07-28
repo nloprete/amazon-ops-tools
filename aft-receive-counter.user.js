@@ -391,6 +391,14 @@
           const parser = new DOMParser();
           const doc = parser.parseFromString(html, 'text/html');
           const rows = doc.querySelectorAll('tr');
+          // Find column indices by header text
+          const headers = doc.querySelectorAll('th');
+          let orgUnitCol = -1;
+          headers.forEach((th, idx) => {
+            const text = th.textContent.trim().toLowerCase();
+            if (text.includes('org') && text.includes('unit')) orgUnitCol = idx;
+          });
+
           rows.forEach(row => {
             const cells = row.querySelectorAll('td');
             if (cells.length < 4) return;
@@ -403,8 +411,18 @@
               const d = new Date(timeText);
               if (!isNaN(d.getTime())) receivedTime = d;
             }
-            // Org. Unit Count is column 6
-            const qty = parseInt((cells[6]?.textContent || '').trim().replace(/,/g, ''), 10) || 0;
+            // Get Org. Unit Count from the identified column
+            let qty = 0;
+            if (orgUnitCol >= 0 && cells[orgUnitCol]) {
+              qty = parseInt((cells[orgUnitCol]?.textContent || '').trim().replace(/,/g, ''), 10) || 0;
+            }
+            // Fallback: look for a large number in remaining cells
+            if (!qty) {
+              for (let i = 4; i < cells.length; i++) {
+                const val = parseInt((cells[i]?.textContent || '').trim().replace(/,/g, ''), 10);
+                if (val >= 100) { qty = val; break; }
+              }
+            }
             if (sourceFC && /^[A-Z]{2,4}\d{0,2}$/.test(sourceFC) && trailerId) {
               trailers.push({ trailerId, sourceFC, qty, source: 'KIPS', receivedTime });
             }
