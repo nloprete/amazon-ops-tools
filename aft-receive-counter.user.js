@@ -390,43 +390,54 @@
           const trailers = [];
           const parser = new DOMParser();
           const doc = parser.parseFromString(html, 'text/html');
-          const rows = doc.querySelectorAll('tr');
-          // Find column indices by header text
-          const headers = doc.querySelectorAll('th');
-          let orgUnitCol = -1;
-          headers.forEach((th, idx) => {
-            const text = th.textContent.trim().toLowerCase();
-            if (text.includes('org') && text.includes('unit')) orgUnitCol = idx;
-          });
+          const allRows = doc.querySelectorAll('tr');
 
-          rows.forEach(row => {
+          // Log first row to debug
+          console.log('[KIPS] Total rows:', allRows.length);
+
+          allRows.forEach(row => {
             const cells = row.querySelectorAll('td');
-            if (cells.length < 4) return;
-            const sourceFC = cells[0]?.textContent.trim();
-            const trailerId = cells[1]?.textContent.trim().replace(/[^\w]/g, '');
-            // Received time is column 3
+            if (cells.length < 5) return;
+
+            // Read all cell values
+            const cellTexts = [];
+            cells.forEach(c => cellTexts.push(c.textContent.trim()));
+
+            // Find the trailer ID — it's the cell that looks like a VRID (alphanumeric, 8-12 chars)
+            let trailerId = '';
+            let sourceFC = '';
             let receivedTime = null;
-            const timeText = cells[3]?.textContent.trim();
-            if (timeText) {
-              const d = new Date(timeText);
-              if (!isNaN(d.getTime())) receivedTime = d;
-            }
-            // Get Org. Unit Count from the identified column
             let qty = 0;
-            if (orgUnitCol >= 0 && cells[orgUnitCol]) {
-              qty = parseInt((cells[orgUnitCol]?.textContent || '').trim().replace(/,/g, ''), 10) || 0;
-            }
-            // Fallback: use the LAST cell that contains a number >= 100
-            if (!qty) {
-              for (let i = cells.length - 1; i >= 4; i--) {
-                const val = parseInt((cells[i]?.textContent || '').trim().replace(/[^0-9]/g, ''), 10);
-                if (val >= 100) { qty = val; break; }
+
+            cellTexts.forEach((text, idx) => {
+              const clean = text.replace(/\s+/g, '');
+              // Source FC: 2-4 uppercase letters + 0-2 digits (like XJF1, RIC7, HGR5)
+              if (/^[A-Z]{2,4}\d{0,2}$/.test(clean) && !sourceFC) {
+                sourceFC = clean;
               }
+              // Trailer ID: 8+ alphanumeric chars (like 1155HL1RR, 114FW5ZZ8)
+              else if (/^[A-Z0-9]{8,}$/i.test(clean) && !trailerId) {
+                trailerId = clean;
+              }
+              // Date: contains year pattern
+              else if (/\d{4}-\d{2}-\d{2}/.test(text) && !receivedTime) {
+                const d = new Date(text);
+                if (!isNaN(d.getTime())) receivedTime = d;
+              }
+            });
+
+            // Find qty: column 6 is Org. Unit Count on KIPS
+            if (cells.length > 6) {
+              const qtyText = cells[6]?.textContent.trim().replace(/[^0-9]/g, '');
+              qty = parseInt(qtyText, 10) || 0;
             }
-            if (sourceFC && /^[A-Z]{2,4}\d{0,2}$/.test(sourceFC) && trailerId) {
+
+            if (trailerId && sourceFC) {
               trailers.push({ trailerId, sourceFC, qty, source: 'KIPS', receivedTime });
             }
           });
+
+          console.log('[KIPS] Parsed trailers:', trailers.length, trailers.slice(0, 3));
           resolve(trailers);
         },
         onerror: () => resolve([]),
