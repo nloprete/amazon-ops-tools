@@ -29,7 +29,7 @@
       border: 2px solid #ff9900;
       display: flex;
       flex-direction: column;
-      resize: both;
+      resize: none;
       overflow: hidden;
       min-width: 500px;
       min-height: 150px;
@@ -420,6 +420,7 @@
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
   else init();
 })();
+
 
 
 
