@@ -304,6 +304,39 @@
       ? '<table><thead><tr><th>VRID</th><th>Received</th><th>Qty</th></tr></thead><tbody>' + rows + '</tbody></table>'
       : '<div style="color:#78909c;padding:8px;text-align:center">No loads found in window</div>';
 
+    // Hourly breakdown
+    const hourlyMap = {};
+    loads.forEach(l => {
+      const hr = l.arrivalTime.getHours();
+      const label = String(hr).padStart(2, '0') + ':00';
+      if (!hourlyMap[label]) hourlyMap[label] = { qty: 0, count: 0 };
+      hourlyMap[label].qty += l.qty;
+      hourlyMap[label].count++;
+    });
+
+    const hourlyKeys = Object.keys(hourlyMap).sort();
+    const maxHourQty = Math.max(...hourlyKeys.map(k => hourlyMap[k].qty), 1);
+    let hourlyHtml = '';
+    if (hourlyKeys.length > 0) {
+      hourlyHtml = '<div style="margin-top:8px;padding-top:6px;border-top:1px solid #ff9900;">';
+      hourlyHtml += '<div style="color:#ff9900;font-weight:700;font-size:10px;margin-bottom:4px;">📊 Hourly Breakdown</div>';
+      hourlyKeys.forEach(k => {
+        const h = hourlyMap[k];
+        const pct = Math.round((h.qty / maxHourQty) * 100);
+        hourlyHtml += `<div style="display:flex;align-items:center;gap:6px;padding:2px 0;font-size:10px;">
+          <span style="width:40px;color:#aab7c4;">${k}</span>
+          <div style="flex:1;background:#3a4553;border-radius:3px;height:12px;overflow:hidden;">
+            <div style="width:${pct}%;height:100%;background:#ff9900;border-radius:3px;"></div>
+          </div>
+          <span style="width:60px;text-align:right;color:#69f0ae;font-weight:700;">${h.qty.toLocaleString()}</span>
+          <span style="width:30px;text-align:right;color:#78909c;font-size:9px;">(${h.count})</span>
+        </div>`;
+      });
+      hourlyHtml += '</div>';
+    }
+
+    document.getElementById('aft-results').innerHTML += hourlyHtml;
+
     const fmt = d => d.toLocaleDateString() + ' 3:00 AM';
     document.getElementById('aft-range').textContent = fmt(start) + ' → ' + fmt(end);
   }
