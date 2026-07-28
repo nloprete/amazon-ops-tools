@@ -424,12 +424,17 @@
     // Get AFT load IDs from the current table
     const aftIds = new Set(aftLoads.map(l => l.loadId.toUpperCase().replace(/[^A-Z0-9]/g, '')));
 
-    // Fetch KIPS
+    // Fetch KIPS and filter by the current date/time range
+    const { start, end } = getShiftWindow();
     const kipsTrailers = await fetchKIPS();
+    const kipsInRange = kipsTrailers.filter(t => {
+      if (!t.receivedTime) return false;
+      return t.receivedTime >= start && t.receivedTime < end;
+    });
 
-    // Find trailers on KIPS but NOT in AFT
+    // Find trailers on KIPS (in range) but NOT in AFT
     // KIPS may append source FC or "AFT" to the ID, so we try multiple match strategies
-    const missing = kipsTrailers.filter(t => {
+    const missing = kipsInRange.filter(t => {
       const kipsId = t.trailerId.toUpperCase().replace(/[^A-Z0-9]/g, '');
       // Direct match
       if (aftIds.has(kipsId)) return false;
