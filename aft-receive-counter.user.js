@@ -304,7 +304,15 @@
       ? '<table><thead><tr><th>VRID</th><th>Received</th><th>Qty</th></tr></thead><tbody>' + rows + '</tbody></table>'
       : '<div style="color:#78909c;padding:8px;text-align:center">No loads found in window</div>';
 
-    // Hourly breakdown
+    // Hourly breakdown — separate side panel
+    let hourlyPanel = document.querySelector('.aft-hourly-panel');
+    if (!hourlyPanel) {
+      hourlyPanel = document.createElement('div');
+      hourlyPanel.className = 'aft-hourly-panel';
+      hourlyPanel.style.cssText = 'position:fixed;top:60px;right:410px;z-index:99998;background:#232f3e;color:#fff;border-radius:8px;padding:10px 14px;font-family:"Amazon Ember",Arial,sans-serif;box-shadow:0 4px 16px rgba(0,0,0,0.3);width:320px;max-height:80vh;overflow-y:auto;border:2px solid #ff9900;';
+      document.body.appendChild(hourlyPanel);
+    }
+
     const hourlyMap = {};
     loads.forEach(l => {
       const hr = l.arrivalTime.getHours();
@@ -316,26 +324,56 @@
 
     const hourlyKeys = Object.keys(hourlyMap).sort();
     const maxHourQty = Math.max(...hourlyKeys.map(k => hourlyMap[k].qty), 1);
-    let hourlyHtml = '';
+
+    // Also track which loads are in each hour for click-to-expand
+    const hourlyLoads = {};
+    loads.forEach(l => {
+      const hr = l.arrivalTime.getHours();
+      const label = String(hr).padStart(2, '0') + ':00';
+      if (!hourlyLoads[label]) hourlyLoads[label] = [];
+      hourlyLoads[label].push(l);
+    });
+
     if (hourlyKeys.length > 0) {
-      hourlyHtml = '<div style="margin-top:8px;padding-top:6px;border-top:1px solid #ff9900;">';
-      hourlyHtml += '<div style="color:#ff9900;font-weight:700;font-size:10px;margin-bottom:4px;">📊 Hourly Breakdown</div>';
+      let hourlyHtml = '<div style="color:#ff9900;font-weight:700;font-size:13px;margin-bottom:8px;border-bottom:2px solid #3a4553;padding-bottom:6px;">📊 Hourly Breakdown</div>';
       hourlyKeys.forEach(k => {
         const h = hourlyMap[k];
         const pct = Math.round((h.qty / maxHourQty) * 100);
-        hourlyHtml += `<div style="display:flex;align-items:center;gap:6px;padding:2px 0;font-size:10px;">
-          <span style="width:40px;color:#aab7c4;">${k}</span>
-          <div style="flex:1;background:#3a4553;border-radius:3px;height:12px;overflow:hidden;">
-            <div style="width:${pct}%;height:100%;background:#ff9900;border-radius:3px;"></div>
+        hourlyHtml += `<div style="display:flex;align-items:center;gap:8px;padding:4px 0;font-size:12px;">
+          <span style="width:45px;color:#aab7c4;font-weight:600;">${k}</span>
+          <div style="flex:1;background:#3a4553;border-radius:4px;height:18px;overflow:hidden;">
+            <div style="width:${pct}%;height:100%;background:#ff9900;border-radius:4px;transition:width 0.3s;"></div>
           </div>
-          <span style="width:60px;text-align:right;color:#69f0ae;font-weight:700;">${h.qty.toLocaleString()}</span>
-          <span style="width:30px;text-align:right;color:#78909c;font-size:9px;">(${h.count})</span>
-        </div>`;
+          <span class="aft-hourly-qty" data-hour="${k}" style="width:65px;text-align:right;color:#69f0ae;font-weight:700;font-size:13px;cursor:pointer;text-decoration:underline;">${h.qty.toLocaleString()}</span>
+          <span style="width:30px;text-align:right;color:#78909c;font-size:10px;">(${h.count})</span>
+        </div>
+        <div class="aft-hourly-detail" data-hour="${k}" style="display:none;margin-left:53px;margin-bottom:4px;padding:4px 8px;background:#2a3544;border-radius:4px;font-size:10px;"></div>`;
       });
-      hourlyHtml += '</div>';
-    }
+      hourlyHtml += `<div style="margin-top:8px;padding-top:6px;border-top:1px solid #3a4553;color:#ff9900;font-weight:700;font-size:12px;text-align:right;">Total: ${totalQty.toLocaleString()}</div>`;
+      hourlyPanel.innerHTML = hourlyHtml;
+      hourlyPanel.style.display = 'block';
 
-    document.getElementById('aft-results').innerHTML += hourlyHtml;
+      // Attach click handlers to qty elements
+      hourlyPanel.querySelectorAll('.aft-hourly-qty').forEach(el => {
+        el.addEventListener('click', () => {
+          const hour = el.dataset.hour;
+          const detailEl = hourlyPanel.querySelector(`.aft-hourly-detail[data-hour="${hour}"]`);
+          if (!detailEl) return;
+          if (detailEl.style.display === 'none') {
+            const hLoads = hourlyLoads[hour] || [];
+            detailEl.innerHTML = hLoads.map(l => {
+              const time = l.arrivalTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+              return `<div style="display:flex;justify-content:space-between;padding:1px 0;"><span style="color:#4fc3f7;">${l.loadId}</span><span style="color:#aab7c4;">${time}</span><span style="color:#69f0ae;">${l.qty.toLocaleString()}</span></div>`;
+            }).join('');
+            detailEl.style.display = 'block';
+          } else {
+            detailEl.style.display = 'none';
+          }
+        });
+      });
+    } else {
+      hourlyPanel.style.display = 'none';
+    }
 
     const fmt = d => d.toLocaleDateString() + ' 3:00 AM';
     document.getElementById('aft-range').textContent = fmt(start) + ' → ' + fmt(end);
