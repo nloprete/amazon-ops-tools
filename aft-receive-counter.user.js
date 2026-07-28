@@ -24,14 +24,14 @@
       padding: 10px 14px;
       font-family: "Amazon Ember", Arial, sans-serif;
       box-shadow: 0 4px 16px rgba(0,0,0,0.3);
-      width: 380px;
+      width: 700px;
       max-height: 80vh;
       border: 2px solid #ff9900;
       display: flex;
       flex-direction: column;
       resize: both;
       overflow: hidden;
-      min-width: 280px;
+      min-width: 500px;
       min-height: 150px;
     }
     .aft-title {
@@ -304,13 +304,12 @@
       ? '<table><thead><tr><th>VRID</th><th>Received</th><th>Qty</th></tr></thead><tbody>' + rows + '</tbody></table>'
       : '<div style="color:#78909c;padding:8px;text-align:center">No loads found in window</div>';
 
-    // Hourly breakdown — separate side panel
-    let hourlyPanel = document.querySelector('.aft-hourly-panel');
-    if (!hourlyPanel) {
-      hourlyPanel = document.createElement('div');
-      hourlyPanel.className = 'aft-hourly-panel';
-      hourlyPanel.style.cssText = 'position:fixed;top:60px;right:410px;z-index:99998;background:#232f3e;color:#fff;border-radius:8px;padding:10px 14px;font-family:"Amazon Ember",Arial,sans-serif;box-shadow:0 4px 16px rgba(0,0,0,0.3);width:320px;max-height:80vh;overflow-y:auto;border:2px solid #ff9900;';
-      document.body.appendChild(hourlyPanel);
+    // Hourly breakdown — inside the main panel
+    let hourlySection = document.getElementById('aft-hourly-section');
+    if (!hourlySection) {
+      hourlySection = document.createElement('div');
+      hourlySection.id = 'aft-hourly-section';
+      document.getElementById('aft-results').after(hourlySection);
     }
 
     const hourlyMap = {};
@@ -335,7 +334,8 @@
     });
 
     if (hourlyKeys.length > 0) {
-      let hourlyHtml = '<div style="color:#ff9900;font-weight:700;font-size:13px;margin-bottom:8px;border-bottom:2px solid #3a4553;padding-bottom:6px;">📊 Hourly Breakdown</div>';
+      let hourlyHtml = '<div style="margin-top:8px;padding-top:8px;border-top:2px solid #ff9900;">';
+      hourlyHtml += '<div style="color:#ff9900;font-weight:700;font-size:13px;margin-bottom:8px;">📊 Hourly Breakdown</div>';
       hourlyKeys.forEach(k => {
         const h = hourlyMap[k];
         const pct = Math.round((h.qty / maxHourQty) * 100);
@@ -349,15 +349,14 @@
         </div>
         <div class="aft-hourly-detail" data-hour="${k}" style="display:none;margin-left:53px;margin-bottom:4px;padding:4px 8px;background:#2a3544;border-radius:4px;font-size:10px;"></div>`;
       });
-      hourlyHtml += `<div style="margin-top:8px;padding-top:6px;border-top:1px solid #3a4553;color:#ff9900;font-weight:700;font-size:12px;text-align:right;">Total: ${totalQty.toLocaleString()}</div>`;
-      hourlyPanel.innerHTML = hourlyHtml;
-      hourlyPanel.style.display = 'block';
+      hourlyHtml += '</div>';
+      hourlySection.innerHTML = hourlyHtml;
 
       // Attach click handlers to qty elements
-      hourlyPanel.querySelectorAll('.aft-hourly-qty').forEach(el => {
+      hourlySection.querySelectorAll('.aft-hourly-qty').forEach(el => {
         el.addEventListener('click', () => {
           const hour = el.dataset.hour;
-          const detailEl = hourlyPanel.querySelector(`.aft-hourly-detail[data-hour="${hour}"]`);
+          const detailEl = hourlySection.querySelector(`.aft-hourly-detail[data-hour="${hour}"]`);
           if (!detailEl) return;
           if (detailEl.style.display === 'none') {
             const hLoads = hourlyLoads[hour] || [];
@@ -372,7 +371,7 @@
         });
       });
     } else {
-      hourlyPanel.style.display = 'none';
+      hourlySection.innerHTML = '';
     }
 
     const fmt = d => d.toLocaleDateString() + ' 3:00 AM';
