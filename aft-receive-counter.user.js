@@ -417,8 +417,17 @@
               const trailerId = cells[3]?.textContent.trim() || cells[4]?.textContent.trim();
               const sourceFC = cells[1]?.textContent.trim();
               const units = parseInt((cells[4]?.textContent || cells[5]?.textContent || '').replace(/,/g, ''), 10) || 0;
+              // Look for a date/time in the row
+              let receivedTime = null;
+              cells.forEach(cell => {
+                const t = cell.textContent.trim();
+                if (/\d{1,2}\/\d{1,2}\/\d{2,4}/.test(t) || /\d{4}-\d{2}-\d{2}/.test(t)) {
+                  const d = new Date(t);
+                  if (!isNaN(d.getTime()) && !receivedTime) receivedTime = d;
+                }
+              });
               if (trailerId && /^[A-Z0-9]{6,}$/i.test(trailerId)) {
-                trailers.push({ trailerId, sourceFC, units, source: 'NYR' });
+                trailers.push({ trailerId, sourceFC, units, source: 'NYR', receivedTime });
               }
             }
           });
@@ -446,8 +455,15 @@
             if (cells.length < 4) return;
             const sourceFC = cells[0]?.textContent.trim();
             const trailerId = cells[1]?.textContent.trim().replace(/[^\w]/g, '');
+            // Received time is typically column 3 (index 3)
+            let receivedTime = null;
+            const timeText = cells[3]?.textContent.trim();
+            if (timeText) {
+              const d = new Date(timeText);
+              if (!isNaN(d.getTime())) receivedTime = d;
+            }
             if (sourceFC && /^[A-Z]{2,4}\d{0,2}$/.test(sourceFC) && trailerId) {
-              trailers.push({ trailerId, sourceFC, units: 0, source: 'KIPS' });
+              trailers.push({ trailerId, sourceFC, units: 0, source: 'KIPS', receivedTime });
             }
           });
           resolve(trailers);
@@ -493,12 +509,20 @@
     // Update the missing count
     if (missingCountEl) missingCountEl.textContent = missing.length;
 
-    // Render missing trailers
+    // Render missing trailers (sorted by received time)
+    missing.sort((a, b) => {
+      if (!a.receivedTime && !b.receivedTime) return 0;
+      if (!a.receivedTime) return 1;
+      if (!b.receivedTime) return -1;
+      return b.receivedTime - a.receivedTime;
+    });
+
     if (missing.length > 0) {
       let html = '<div style="color:#ff5252;font-weight:700;font-size:13px;margin-bottom:8px;border-bottom:2px solid #ff5252;padding-bottom:6px;">⚠️ Missing from AFT (' + missing.length + ')</div>';
-      html += '<table style="width:100%;border-collapse:collapse;"><thead><tr><th style="background:#3a4553;color:#ff5252;padding:3px 5px;text-align:left;font-size:10px;">Trailer</th><th style="background:#3a4553;color:#ff5252;padding:3px 5px;text-align:left;font-size:10px;">Source</th><th style="background:#3a4553;color:#ff5252;padding:3px 5px;text-align:left;font-size:10px;">Found On</th></tr></thead><tbody>';
+      html += '<table style="width:100%;border-collapse:collapse;"><thead><tr><th style="background:#3a4553;color:#ff5252;padding:3px 5px;text-align:left;font-size:10px;">Trailer</th><th style="background:#3a4553;color:#ff5252;padding:3px 5px;text-align:left;font-size:10px;">Source</th><th style="background:#3a4553;color:#ff5252;padding:3px 5px;text-align:left;font-size:10px;">Received</th><th style="background:#3a4553;color:#ff5252;padding:3px 5px;text-align:left;font-size:10px;">Found On</th></tr></thead><tbody>';
       missing.forEach(t => {
-        html += `<tr><td style="padding:2px 5px;border-bottom:1px solid #3a4553;color:#ff9900;font-weight:600;">${t.trailerId}</td><td style="padding:2px 5px;border-bottom:1px solid #3a4553;color:#aab7c4;">${t.sourceFC || '—'}</td><td style="padding:2px 5px;border-bottom:1px solid #3a4553;color:${t.source === 'NYR' ? '#4fc3f7' : '#ff9800'};">${t.source}</td></tr>`;
+        const timeStr = t.receivedTime ? t.receivedTime.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—';
+        html += `<tr><td style="padding:2px 5px;border-bottom:1px solid #3a4553;color:#ff9900;font-weight:600;">${t.trailerId}</td><td style="padding:2px 5px;border-bottom:1px solid #3a4553;color:#aab7c4;">${t.sourceFC || '—'}</td><td style="padding:2px 5px;border-bottom:1px solid #3a4553;color:#aab7c4;font-size:10px;">${timeStr}</td><td style="padding:2px 5px;border-bottom:1px solid #3a4553;color:${t.source === 'NYR' ? '#4fc3f7' : '#ff9800'};">${t.source}</td></tr>`;
       });
       html += '</tbody></table>';
       missingSection.innerHTML = html;
