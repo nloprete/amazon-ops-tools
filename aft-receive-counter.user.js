@@ -422,13 +422,26 @@
     missingSection.innerHTML = '<div style="color:#78909c;padding:8px;text-align:center;">⏳ Checking KIPS...</div>';
 
     // Get AFT load IDs from the current table
-    const aftIds = new Set(aftLoads.map(l => l.loadId.toUpperCase()));
+    const aftIds = new Set(aftLoads.map(l => l.loadId.toUpperCase().replace(/[^A-Z0-9]/g, '')));
 
     // Fetch KIPS
     const kipsTrailers = await fetchKIPS();
 
     // Find trailers on KIPS but NOT in AFT
-    const missing = kipsTrailers.filter(t => !aftIds.has(t.trailerId.toUpperCase()));
+    // KIPS may append source FC or "AFT" to the ID, so we try multiple match strategies
+    const missing = kipsTrailers.filter(t => {
+      const kipsId = t.trailerId.toUpperCase().replace(/[^A-Z0-9]/g, '');
+      // Direct match
+      if (aftIds.has(kipsId)) return false;
+      // Try stripping common suffixes (AFT, source FC codes)
+      const stripped = kipsId.replace(/(AFT|RIC4|RIC7|XJF1|XMD3|AVP0|AVP1|HGR5|MQJ1|ORF2|ORF7|MDT4|ABE8)$/i, '');
+      if (aftIds.has(stripped)) return false;
+      // Try matching if AFT ID is contained within KIPS ID
+      for (const aftId of aftIds) {
+        if (kipsId.includes(aftId) || aftId.includes(kipsId)) return false;
+      }
+      return true;
+    });
 
     // Sort by received time (most recent first)
     missing.sort((a, b) => {
