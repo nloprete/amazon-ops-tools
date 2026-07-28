@@ -396,15 +396,17 @@
             if (cells.length < 4) return;
             const sourceFC = cells[0]?.textContent.trim();
             const trailerId = cells[1]?.textContent.trim().replace(/[^\w]/g, '');
-            // Received time is typically column 3 (index 3)
+            // Received time is column 3
             let receivedTime = null;
             const timeText = cells[3]?.textContent.trim();
             if (timeText) {
               const d = new Date(timeText);
               if (!isNaN(d.getTime())) receivedTime = d;
             }
+            // Org. Unit Count is column 6
+            const qty = parseInt((cells[6]?.textContent || '').trim().replace(/,/g, ''), 10) || 0;
             if (sourceFC && /^[A-Z]{2,4}\d{0,2}$/.test(sourceFC) && trailerId) {
-              trailers.push({ trailerId, sourceFC, source: 'KIPS', receivedTime });
+              trailers.push({ trailerId, sourceFC, qty, source: 'KIPS', receivedTime });
             }
           });
           resolve(trailers);
@@ -462,12 +464,15 @@
     // Render missing trailers
     if (missing.length > 0) {
       let html = '<div style="color:#ff5252;font-weight:700;font-size:13px;margin-bottom:8px;border-bottom:2px solid #ff5252;padding-bottom:6px;">⚠️ On KIPS, not in AFT (' + missing.length + ')</div>';
-      html += '<table style="width:100%;border-collapse:collapse;"><thead><tr><th style="background:#3a4553;color:#ff5252;padding:3px 5px;text-align:left;font-size:10px;">VRID</th><th style="background:#3a4553;color:#ff5252;padding:3px 5px;text-align:left;font-size:10px;">Source</th><th style="background:#3a4553;color:#ff5252;padding:3px 5px;text-align:left;font-size:10px;">Received</th></tr></thead><tbody>';
+      html += '<table style="width:100%;border-collapse:collapse;"><thead><tr><th style="background:#3a4553;color:#ff5252;padding:3px 5px;text-align:left;font-size:10px;">VRID</th><th style="background:#3a4553;color:#ff5252;padding:3px 5px;text-align:left;font-size:10px;">Source</th><th style="background:#3a4553;color:#ff5252;padding:3px 5px;text-align:left;font-size:10px;">Received</th><th style="background:#3a4553;color:#ff5252;padding:3px 5px;text-align:right;font-size:10px;">Qty</th></tr></thead><tbody>';
       missing.forEach(t => {
         const timeStr = t.receivedTime ? t.receivedTime.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—';
-        html += `<tr><td style="padding:2px 5px;border-bottom:1px solid #3a4553;color:#ff9900;font-weight:600;">${t.trailerId}</td><td style="padding:2px 5px;border-bottom:1px solid #3a4553;color:#aab7c4;">${t.sourceFC || '—'}</td><td style="padding:2px 5px;border-bottom:1px solid #3a4553;color:#aab7c4;font-size:10px;">${timeStr}</td></tr>`;
+        html += `<tr><td style="padding:2px 5px;border-bottom:1px solid #3a4553;color:#ff9900;font-weight:600;">${t.trailerId}</td><td style="padding:2px 5px;border-bottom:1px solid #3a4553;color:#aab7c4;">${t.sourceFC || '—'}</td><td style="padding:2px 5px;border-bottom:1px solid #3a4553;color:#aab7c4;font-size:10px;">${timeStr}</td><td style="padding:2px 5px;border-bottom:1px solid #3a4553;color:#69f0ae;font-weight:700;text-align:right;">${t.qty ? t.qty.toLocaleString() : '—'}</td></tr>`;
       });
       html += '</tbody></table>';
+      // Total missing qty
+      const totalMissingQty = missing.reduce((sum, t) => sum + (t.qty || 0), 0);
+      html += `<div style="margin-top:6px;padding-top:4px;border-top:1px solid #3a4553;color:#ff5252;font-weight:700;font-size:12px;text-align:right;">Missing Qty: ${totalMissingQty.toLocaleString()}</div>`;
       missingSection.innerHTML = html;
     } else {
       missingSection.innerHTML = '<div style="color:#69f0ae;padding:8px;text-align:center;font-weight:700;">✓ All KIPS trailers accounted for</div>';
