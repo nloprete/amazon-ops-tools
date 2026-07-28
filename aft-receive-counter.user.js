@@ -404,7 +404,7 @@
               if (!isNaN(d.getTime())) receivedTime = d;
             }
             if (sourceFC && /^[A-Z]{2,4}\d{0,2}$/.test(sourceFC) && trailerId) {
-              trailers.push({ trailerId, sourceFC, units: 0, source: 'KIPS', receivedTime });
+              trailers.push({ trailerId, sourceFC, source: 'KIPS', receivedTime });
             }
           });
           resolve(trailers);
@@ -421,28 +421,34 @@
 
     missingSection.innerHTML = '<div style="color:#78909c;padding:8px;text-align:center;">⏳ Checking KIPS...</div>';
 
-    // Get AFT trailer IDs (load IDs from the current table)
-    const aftIds = new Set(aftLoads.map(l => l.loadId.toUpperCase()));
+    // Get AFT load IDs from the current table
+    const aftIds = new Set(aftLoads.map(l => l.loadId.toUpperCase().replace(/[^A-Z0-9]/g, '')));
 
-    // Fetch KIPS
+    // Fetch KIPS and filter by the current date/time range
+    const { start, end } = getShiftWindow();
     const kipsTrailers = await fetchKIPS();
-
-    // Find trailers on KIPS but NOT in AFT
-    const missing = [];
-    const seenIds = new Set();
-
-    kipsTrailers.forEach(t => {
-      const id = t.trailerId.toUpperCase();
-      if (!aftIds.has(id) && !seenIds.has(id)) {
-        seenIds.add(id);
-        missing.push(t);
-      }
+    const kipsInRange = kipsTrailers.filter(t => {
+      if (!t.receivedTime) return false;
+      return t.receivedTime >= start && t.receivedTime < end;
     });
 
-    // Update the missing count
-    if (missingCountEl) missingCountEl.textContent = missing.length;
+    // Find trailers on KIPS (in range) but NOT in AFT
+    // KIPS may append source FC or "AFT" to the ID, so we try multiple match strategies
+    const missing = kipsInRange.filter(t => {
+      const kipsId = t.trailerId.toUpperCase().replace(/[^A-Z0-9]/g, '');
+      // Direct match
+      if (aftIds.has(kipsId)) return false;
+      // Try stripping common suffixes (AFT, source FC codes)
+      const stripped = kipsId.replace(/(AFT|RIC4|RIC7|XJF1|XMD3|AVP0|AVP1|HGR5|MQJ1|ORF2|ORF7|MDT4|ABE8)$/i, '');
+      if (aftIds.has(stripped)) return false;
+      // Try matching if AFT ID is contained within KIPS ID
+      for (const aftId of aftIds) {
+        if (kipsId.includes(aftId) || aftId.includes(kipsId)) return false;
+      }
+      return true;
+    });
 
-    // Render missing trailers (sorted by received time)
+    // Sort by received time (most recent first)
     missing.sort((a, b) => {
       if (!a.receivedTime && !b.receivedTime) return 0;
       if (!a.receivedTime) return 1;
@@ -450,6 +456,10 @@
       return b.receivedTime - a.receivedTime;
     });
 
+    // Update the missing count
+    if (missingCountEl) missingCountEl.textContent = missing.length;
+
+    // Render missing trailers
     if (missing.length > 0) {
       let html = '<div style="color:#ff5252;font-weight:700;font-size:13px;margin-bottom:8px;border-bottom:2px solid #ff5252;padding-bottom:6px;">⚠️ On KIPS, not in AFT (' + missing.length + ')</div>';
       html += '<table style="width:100%;border-collapse:collapse;"><thead><tr><th style="background:#3a4553;color:#ff5252;padding:3px 5px;text-align:left;font-size:10px;">VRID</th><th style="background:#3a4553;color:#ff5252;padding:3px 5px;text-align:left;font-size:10px;">Source</th><th style="background:#3a4553;color:#ff5252;padding:3px 5px;text-align:left;font-size:10px;">Received</th></tr></thead><tbody>';
@@ -460,7 +470,7 @@
       html += '</tbody></table>';
       missingSection.innerHTML = html;
     } else {
-      missingSection.innerHTML = '<div style="color:#69f0ae;padding:8px;text-align:center;font-weight:700;">✓ No missing trailers</div>';
+      missingSection.innerHTML = '<div style="color:#69f0ae;padding:8px;text-align:center;font-weight:700;">✓ All KIPS trailers accounted for</div>';
     }
   }
 
