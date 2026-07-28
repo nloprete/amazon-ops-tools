@@ -416,10 +416,10 @@
             if (orgUnitCol >= 0 && cells[orgUnitCol]) {
               qty = parseInt((cells[orgUnitCol]?.textContent || '').trim().replace(/,/g, ''), 10) || 0;
             }
-            // Fallback: look for a large number in remaining cells
+            // Fallback: use the LAST cell that contains a number >= 100
             if (!qty) {
-              for (let i = 4; i < cells.length; i++) {
-                const val = parseInt((cells[i]?.textContent || '').trim().replace(/,/g, ''), 10);
+              for (let i = cells.length - 1; i >= 4; i--) {
+                const val = parseInt((cells[i]?.textContent || '').trim().replace(/[^0-9]/g, ''), 10);
                 if (val >= 100) { qty = val; break; }
               }
             }
