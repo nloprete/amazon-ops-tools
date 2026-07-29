@@ -456,6 +456,7 @@
       // Combined total
       const grandTotal = dayTotal + nightTotal;
       periodHtml += `<div style="display:flex;justify-content:space-between;padding:6px 0;margin-top:6px;border-top:2px solid #69f0ae;"><span style="color:#69f0ae;font-weight:900;font-size:12px;">Combined Total</span><span style="color:#69f0ae;font-weight:900;font-size:14px;">${grandTotal.toLocaleString()}</span></div>`;
+      periodHtml += `<div style="font-size:9px;color:#78909c;margin-top:4px;font-style:italic;">*Total does not include trailers missing on AFT</div>`;
 
       periodHtml += '</div>';
       periodSection.innerHTML = periodHtml;
