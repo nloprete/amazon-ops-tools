@@ -453,6 +453,10 @@
       });
       periodHtml += `<div style="display:flex;justify-content:space-between;padding:4px 0;margin-top:2px;border-top:1px solid #3a4553;"><span style="color:#4fc3f7;font-weight:700;font-size:11px;">Night Total</span><span style="color:#69f0ae;font-weight:700;font-size:12px;">${nightTotal.toLocaleString()}</span></div>`;
 
+      // Combined total
+      const grandTotal = dayTotal + nightTotal;
+      periodHtml += `<div style="display:flex;justify-content:space-between;padding:6px 0;margin-top:6px;border-top:2px solid #69f0ae;"><span style="color:#69f0ae;font-weight:900;font-size:12px;">Combined Total</span><span style="color:#69f0ae;font-weight:900;font-size:14px;">${grandTotal.toLocaleString()}</span></div>`;
+
       periodHtml += '</div>';
       periodSection.innerHTML = periodHtml;
 
