@@ -389,15 +389,17 @@
         return periods.map(p => {
           let qty = 0;
           let count = 0;
+          const periodLoads = [];
           loads.forEach(l => {
             let hr = l.arrivalTime.getHours() + l.arrivalTime.getMinutes() / 60;
             if (isNight && hr < 12) hr += 24;
             if (hr >= p.start && hr < p.end) {
               qty += l.qty;
               count++;
+              periodLoads.push(l);
             }
           });
-          return { ...p, qty, count };
+          return { ...p, qty, count, loads: periodLoads };
         });
       }
 
@@ -417,34 +419,62 @@
 
       // Day shift
       periodHtml += '<div style="color:#ff9900;font-weight:700;font-size:11px;margin-bottom:4px;">☀️ Day (07:00–17:30)</div>';
-      dayData.forEach(p => {
+      let dayTotal = 0;
+      dayData.forEach((p, idx) => {
+        dayTotal += p.qty;
         const pct = Math.round((p.qty / maxPeriodQty) * 100);
         periodHtml += `<div style="display:flex;align-items:center;gap:6px;padding:3px 0;font-size:12px;">
           <span style="width:25px;color:#ff9900;font-weight:700;">${p.label}</span>
           <div style="flex:1;background:#3a4553;border-radius:4px;height:14px;overflow:hidden;">
             <div style="width:${pct}%;height:100%;background:#ff9900;border-radius:4px;"></div>
           </div>
-          <span style="width:60px;text-align:right;color:#69f0ae;font-weight:700;font-size:12px;">${p.qty.toLocaleString()}</span>
+          <span class="aft-period-qty" data-period="day-${idx}" style="width:60px;text-align:right;color:#69f0ae;font-weight:700;font-size:12px;cursor:pointer;text-decoration:underline;">${p.qty.toLocaleString()}</span>
           <span style="width:22px;text-align:right;color:#78909c;font-size:9px;">(${p.count})</span>
-        </div>`;
+        </div>
+        <div class="aft-period-detail" data-period="day-${idx}" style="display:none;margin-left:31px;margin-bottom:4px;padding:4px 8px;background:#2a3544;border-radius:4px;font-size:10px;max-height:100px;overflow-y:auto;"></div>`;
       });
+      periodHtml += `<div style="display:flex;justify-content:space-between;padding:4px 0;margin-top:2px;border-top:1px solid #3a4553;"><span style="color:#ff9900;font-weight:700;font-size:11px;">Day Total</span><span style="color:#69f0ae;font-weight:700;font-size:12px;">${dayTotal.toLocaleString()}</span></div>`;
 
       // Night shift
       periodHtml += '<div style="color:#4fc3f7;font-weight:700;font-size:11px;margin-top:8px;margin-bottom:4px;">🌙 Night (18:00–04:30)</div>';
-      nightData.forEach(p => {
+      let nightTotal = 0;
+      nightData.forEach((p, idx) => {
+        nightTotal += p.qty;
         const pct = Math.round((p.qty / maxPeriodQty) * 100);
         periodHtml += `<div style="display:flex;align-items:center;gap:6px;padding:3px 0;font-size:12px;">
           <span style="width:25px;color:#4fc3f7;font-weight:700;">${p.label}</span>
           <div style="flex:1;background:#3a4553;border-radius:4px;height:14px;overflow:hidden;">
             <div style="width:${pct}%;height:100%;background:#4fc3f7;border-radius:4px;"></div>
           </div>
-          <span style="width:60px;text-align:right;color:#69f0ae;font-weight:700;font-size:12px;">${p.qty.toLocaleString()}</span>
+          <span class="aft-period-qty" data-period="night-${idx}" style="width:60px;text-align:right;color:#69f0ae;font-weight:700;font-size:12px;cursor:pointer;text-decoration:underline;">${p.qty.toLocaleString()}</span>
           <span style="width:22px;text-align:right;color:#78909c;font-size:9px;">(${p.count})</span>
-        </div>`;
+        </div>
+        <div class="aft-period-detail" data-period="night-${idx}" style="display:none;margin-left:31px;margin-bottom:4px;padding:4px 8px;background:#2a3544;border-radius:4px;font-size:10px;max-height:100px;overflow-y:auto;"></div>`;
       });
+      periodHtml += `<div style="display:flex;justify-content:space-between;padding:4px 0;margin-top:2px;border-top:1px solid #3a4553;"><span style="color:#4fc3f7;font-weight:700;font-size:11px;">Night Total</span><span style="color:#69f0ae;font-weight:700;font-size:12px;">${nightTotal.toLocaleString()}</span></div>`;
 
       periodHtml += '</div>';
       periodSection.innerHTML = periodHtml;
+
+      // Attach click handlers for period qty
+      const allPeriodData = { ...Object.fromEntries(dayData.map((p, i) => [`day-${i}`, p])), ...Object.fromEntries(nightData.map((p, i) => [`night-${i}`, p])) };
+      periodSection.querySelectorAll('.aft-period-qty').forEach(el => {
+        el.addEventListener('click', () => {
+          const key = el.dataset.period;
+          const detailEl = periodSection.querySelector(`.aft-period-detail[data-period="${key}"]`);
+          if (!detailEl) return;
+          if (detailEl.style.display === 'none') {
+            const pLoads = allPeriodData[key]?.loads || [];
+            detailEl.innerHTML = pLoads.map(l => {
+              const time = l.arrivalTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+              return `<div style="display:flex;justify-content:space-between;padding:1px 0;"><span style="color:#4fc3f7;">${l.loadId}</span><span style="color:#aab7c4;">${time}</span><span style="color:#69f0ae;">${l.qty.toLocaleString()}</span></div>`;
+            }).join('') || '<div style="color:#78909c;">No loads</div>';
+            detailEl.style.display = 'block';
+          } else {
+            detailEl.style.display = 'none';
+          }
+        });
+      });
     }
 
     const fmt = d => d.toLocaleDateString() + ' 3:00 AM';
