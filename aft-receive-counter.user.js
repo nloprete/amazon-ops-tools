@@ -506,7 +506,7 @@
             const cells = row.querySelectorAll('td');
             if (cells.length < 4) return;
             const sourceFC = cells[0]?.textContent.trim();
-            const trailerId = cells[1]?.textContent.trim().replace(/[^\w]/g, '');
+            const trailerId = cells[1]?.textContent.trim().replace(/[^\w]/g, '').replace(/AFT$/i, '');
             // Received time is typically column 3 (index 3)
             let receivedTime = null;
             const timeText = cells[3]?.textContent.trim();
