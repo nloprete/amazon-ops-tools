@@ -256,7 +256,7 @@
     const defaults = getDefaultTimes();
     const panel = document.createElement('div');
     panel.className = 'aft-panel';
-    panel.innerHTML = '<div class="aft-title">📦 Daily Receive<button class="aft-min-btn">▲</button></div><div class="aft-body"><div class="aft-inputs"><label>From:</label><input type="datetime-local" class="aft-input" id="aft-start" value="' + defaults.startStr + '"><label>To:</label><input type="datetime-local" class="aft-input" id="aft-end" value="' + defaults.endStr + '"></div><div class="aft-summary"><div class="aft-stat"><div class="val" id="aft-total">...</div><div class="lbl">TOTAL QTY</div></div><div class="aft-stat"><div class="val" id="aft-loads" style="color:#4fc3f7">...</div><div class="lbl">LOADS</div></div><div class="aft-stat"><div class="val" id="aft-missing-count" style="color:#ff5252">...</div><div class="lbl">MISSING</div></div></div><div style="display:flex;gap:24px;flex:1;min-height:0;overflow:hidden;"><div id="aft-hourly-section" style="flex:1;overflow-y:auto;min-width:0;"></div><div id="aft-results" style="flex:1;overflow-y:auto;min-width:0;"></div><div id="aft-missing-section" style="flex:1;overflow-y:auto;min-width:0;"></div></div><button class="aft-refresh" id="aft-refresh">↻ Refresh</button><div class="aft-time-range" id="aft-range"></div></div>';
+    panel.innerHTML = '<div class="aft-title">📦 Daily Receive<button class="aft-min-btn">▲</button></div><div class="aft-body"><div class="aft-inputs"><label>From:</label><input type="datetime-local" class="aft-input" id="aft-start" value="' + defaults.startStr + '"><label>To:</label><input type="datetime-local" class="aft-input" id="aft-end" value="' + defaults.endStr + '"></div><div class="aft-summary"><div class="aft-stat"><div class="val" id="aft-total">...</div><div class="lbl">TOTAL QTY</div></div><div class="aft-stat"><div class="val" id="aft-loads" style="color:#4fc3f7">...</div><div class="lbl">LOADS</div></div><div class="aft-stat"><div class="val" id="aft-missing-count" style="color:#ff5252">...</div><div class="lbl">MISSING</div></div></div><div style="display:flex;gap:24px;flex:1;min-height:0;overflow:hidden;"><div id="aft-hourly-section" style="flex:1;overflow-y:auto;min-width:0;"></div><div id="aft-period-section" style="flex:0.7;overflow-y:auto;min-width:0;"></div><div id="aft-results" style="flex:1;overflow-y:auto;min-width:0;"></div><div id="aft-missing-section" style="flex:1;overflow-y:auto;min-width:0;"></div></div><button class="aft-refresh" id="aft-refresh">↻ Refresh</button><div class="aft-time-range" id="aft-range"></div></div>';
     document.body.appendChild(panel);
 
     panel.querySelector('.aft-min-btn').addEventListener('click', () => {
@@ -371,10 +371,71 @@
       hourlySection.innerHTML = '';
     }
 
+    // Period breakdown
+    const periodSection = document.getElementById('aft-period-section');
+    if (periodSection) {
+      const now = new Date();
+      const hour = now.getHours();
+      const isDay = (hour >= 7 && hour < 17.5);
+
+      // Define periods based on shift
+      const periods = isDay
+        ? [
+            { label: 'P1', start: 7, end: 11 },
+            { label: 'P2', start: 11, end: 14 },
+            { label: 'P3', start: 14, end: 17.5 }
+          ]
+        : [
+            { label: 'P1', start: 18, end: 22 },
+            { label: 'P2', start: 22, end: 26 },  // 26 = 02:00 next day
+            { label: 'P3', start: 26, end: 28.5 } // 28.5 = 04:30 next day
+          ];
+
+      const periodData = periods.map(p => {
+        let qty = 0;
+        let count = 0;
+        loads.forEach(l => {
+          let hr = l.arrivalTime.getHours() + l.arrivalTime.getMinutes() / 60;
+          // For night shift, hours after midnight need +24
+          if (!isDay && hr < 12) hr += 24;
+          if (hr >= p.start && hr < p.end) {
+            qty += l.qty;
+            count++;
+          }
+        });
+        return { ...p, qty, count };
+      });
+
+      const maxPeriodQty = Math.max(...periodData.map(p => p.qty), 1);
+      const timeLabel = (h) => {
+        const actual = h >= 24 ? h - 24 : h;
+        const hr = Math.floor(actual);
+        const min = Math.round((actual - hr) * 60);
+        return String(hr).padStart(2, '0') + ':' + String(min).padStart(2, '0');
+      };
+
+      let periodHtml = '<div style="margin-top:8px;padding-top:8px;border-top:2px solid #4fc3f7;">';
+      periodHtml += '<div style="color:#4fc3f7;font-weight:700;font-size:13px;margin-bottom:8px;">⏱️ By Period</div>';
+      periodData.forEach(p => {
+        const pct = Math.round((p.qty / maxPeriodQty) * 100);
+        periodHtml += `<div style="display:flex;align-items:center;gap:8px;padding:6px 0;font-size:12px;">
+          <span style="width:25px;color:#4fc3f7;font-weight:700;font-size:14px;">${p.label}</span>
+          <div style="flex:1;background:#3a4553;border-radius:4px;height:18px;overflow:hidden;">
+            <div style="width:${pct}%;height:100%;background:#4fc3f7;border-radius:4px;transition:width 0.3s;"></div>
+          </div>
+          <span style="width:65px;text-align:right;color:#69f0ae;font-weight:700;font-size:13px;">${p.qty.toLocaleString()}</span>
+          <span style="width:25px;text-align:right;color:#78909c;font-size:10px;">(${p.count})</span>
+        </div>
+        <div style="font-size:9px;color:#78909c;margin-left:33px;margin-bottom:2px;">${timeLabel(p.start)} – ${timeLabel(p.end)}</div>`;
+      });
+      periodHtml += '</div>';
+      periodSection.innerHTML = periodHtml;
+    }
+
     const fmt = d => d.toLocaleDateString() + ' 3:00 AM';
     document.getElementById('aft-range').textContent = fmt(start) + ' → ' + fmt(end);
 
-    // Fetch NYR and KIPS to find missing trailers
+    // Fetch KIPS to find missing trailers
     checkMissingTrailers(loads);
   }
 
@@ -521,5 +582,6 @@
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
   else init();
 })();
+
 
 
