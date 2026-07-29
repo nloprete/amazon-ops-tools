@@ -371,42 +371,41 @@
       hourlySection.innerHTML = '';
     }
 
-    // Period breakdown
+    // Period breakdown — show BOTH day and night shifts
     const periodSection = document.getElementById('aft-period-section');
     if (periodSection) {
-      const now = new Date();
-      const hour = now.getHours();
-      const isDay = (hour >= 7 && hour < 17.5);
+      const dayPeriods = [
+        { label: 'P1', start: 7, end: 11 },
+        { label: 'P2', start: 11, end: 14 },
+        { label: 'P3', start: 14, end: 17.5 }
+      ];
+      const nightPeriods = [
+        { label: 'P1', start: 18, end: 22 },
+        { label: 'P2', start: 22, end: 26 },
+        { label: 'P3', start: 26, end: 28.5 }
+      ];
 
-      // Define periods based on shift
-      const periods = isDay
-        ? [
-            { label: 'P1', start: 7, end: 11 },
-            { label: 'P2', start: 11, end: 14 },
-            { label: 'P3', start: 14, end: 17.5 }
-          ]
-        : [
-            { label: 'P1', start: 18, end: 22 },
-            { label: 'P2', start: 22, end: 26 },  // 26 = 02:00 next day
-            { label: 'P3', start: 26, end: 28.5 } // 28.5 = 04:30 next day
-          ];
-
-      const periodData = periods.map(p => {
-        let qty = 0;
-        let count = 0;
-        loads.forEach(l => {
-          let hr = l.arrivalTime.getHours() + l.arrivalTime.getMinutes() / 60;
-          // For night shift, hours after midnight need +24
-          if (!isDay && hr < 12) hr += 24;
-          if (hr >= p.start && hr < p.end) {
-            qty += l.qty;
-            count++;
-          }
+      function calcPeriodData(periods, isNight) {
+        return periods.map(p => {
+          let qty = 0;
+          let count = 0;
+          loads.forEach(l => {
+            let hr = l.arrivalTime.getHours() + l.arrivalTime.getMinutes() / 60;
+            if (isNight && hr < 12) hr += 24;
+            if (hr >= p.start && hr < p.end) {
+              qty += l.qty;
+              count++;
+            }
+          });
+          return { ...p, qty, count };
         });
-        return { ...p, qty, count };
-      });
+      }
 
-      const maxPeriodQty = Math.max(...periodData.map(p => p.qty), 1);
+      const dayData = calcPeriodData(dayPeriods, false);
+      const nightData = calcPeriodData(nightPeriods, true);
+      const allData = [...dayData, ...nightData];
+      const maxPeriodQty = Math.max(...allData.map(p => p.qty), 1);
+
       const timeLabel = (h) => {
         const actual = h >= 24 ? h - 24 : h;
         const hr = Math.floor(actual);
@@ -415,19 +414,35 @@
       };
 
       let periodHtml = '<div style="margin-top:8px;padding-top:8px;border-top:2px solid #4fc3f7;">';
-      periodHtml += '<div style="color:#4fc3f7;font-weight:700;font-size:13px;margin-bottom:8px;">⏱️ By Period</div>';
-      periodData.forEach(p => {
+
+      // Day shift
+      periodHtml += '<div style="color:#ff9900;font-weight:700;font-size:11px;margin-bottom:4px;">☀️ Day (07:00–17:30)</div>';
+      dayData.forEach(p => {
         const pct = Math.round((p.qty / maxPeriodQty) * 100);
-        periodHtml += `<div style="display:flex;align-items:center;gap:8px;padding:6px 0;font-size:12px;">
-          <span style="width:25px;color:#4fc3f7;font-weight:700;font-size:14px;">${p.label}</span>
-          <div style="flex:1;background:#3a4553;border-radius:4px;height:18px;overflow:hidden;">
-            <div style="width:${pct}%;height:100%;background:#4fc3f7;border-radius:4px;transition:width 0.3s;"></div>
+        periodHtml += `<div style="display:flex;align-items:center;gap:6px;padding:3px 0;font-size:12px;">
+          <span style="width:25px;color:#ff9900;font-weight:700;">${p.label}</span>
+          <div style="flex:1;background:#3a4553;border-radius:4px;height:14px;overflow:hidden;">
+            <div style="width:${pct}%;height:100%;background:#ff9900;border-radius:4px;"></div>
           </div>
-          <span style="width:65px;text-align:right;color:#69f0ae;font-weight:700;font-size:13px;">${p.qty.toLocaleString()}</span>
-          <span style="width:25px;text-align:right;color:#78909c;font-size:10px;">(${p.count})</span>
-        </div>
-        <div style="font-size:9px;color:#78909c;margin-left:33px;margin-bottom:2px;">${timeLabel(p.start)} – ${timeLabel(p.end)}</div>`;
+          <span style="width:60px;text-align:right;color:#69f0ae;font-weight:700;font-size:12px;">${p.qty.toLocaleString()}</span>
+          <span style="width:22px;text-align:right;color:#78909c;font-size:9px;">(${p.count})</span>
+        </div>`;
       });
+
+      // Night shift
+      periodHtml += '<div style="color:#4fc3f7;font-weight:700;font-size:11px;margin-top:8px;margin-bottom:4px;">🌙 Night (18:00–04:30)</div>';
+      nightData.forEach(p => {
+        const pct = Math.round((p.qty / maxPeriodQty) * 100);
+        periodHtml += `<div style="display:flex;align-items:center;gap:6px;padding:3px 0;font-size:12px;">
+          <span style="width:25px;color:#4fc3f7;font-weight:700;">${p.label}</span>
+          <div style="flex:1;background:#3a4553;border-radius:4px;height:14px;overflow:hidden;">
+            <div style="width:${pct}%;height:100%;background:#4fc3f7;border-radius:4px;"></div>
+          </div>
+          <span style="width:60px;text-align:right;color:#69f0ae;font-weight:700;font-size:12px;">${p.qty.toLocaleString()}</span>
+          <span style="width:22px;text-align:right;color:#78909c;font-size:9px;">(${p.count})</span>
+        </div>`;
+      });
+
       periodHtml += '</div>';
       periodSection.innerHTML = periodHtml;
     }
