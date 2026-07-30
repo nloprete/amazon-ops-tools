@@ -173,7 +173,14 @@
       const startDate = params.get('startDateWeek') || params.get('startDate') || '';
       const warehouseId = params.get('warehouseId') || 'RIC4';
 
-      const url = `https://fclm-portal.amazon.com/reports/functionRollup?reportFormat=HTML&warehouseId=${warehouseId}&processId=1003020&spanType=${spanType}&startDateWeek=${encodeURIComponent(startDate)}&maxIntradayDays=1&startHourIntraday=0&startMinuteIntraday=0&endHourIntraday=0&endMinuteIntraday=0`;
+      // Build the TIS URL using whichever date param is available
+      const dateParam = spanType === 'Week'
+        ? `startDateWeek=${encodeURIComponent(startDate)}`
+        : `startDate=${encodeURIComponent(startDate)}`;
+
+      const url = `https://fclm-portal.amazon.com/reports/functionRollup?reportFormat=HTML&warehouseId=${warehouseId}&processId=1003020&spanType=${spanType}&${dateParam}&maxIntradayDays=1&startHourIntraday=0&startMinuteIntraday=0&endHourIntraday=0&endMinuteIntraday=0`;
+
+      console.log('[BP] Fetching TIS URL:', url);
 
       GM_xmlhttpRequest({
         method: 'GET',
@@ -187,19 +194,22 @@
             const tables = doc.querySelectorAll('table');
             let table = null;
             for (const t of tables) {
-              if (t.querySelectorAll('tr').length > tables.length) table = t;
               if (!table || t.querySelectorAll('tr').length > table.querySelectorAll('tr').length) table = t;
             }
             if (table) {
-              table.querySelectorAll('tr').forEach(row => {
+              const rows = table.querySelectorAll('tr');
+              console.log('[BP] TIS table found with', rows.length, 'rows');
+              rows.forEach(row => {
                 const cells = row.querySelectorAll('td');
-                if (cells.length < 14) return;
+                if (cells.length < 12) return;
                 const login = cells[6]?.textContent.trim();
                 const hours = parseFloat(cells[11]?.textContent.trim()) || 0;
                 if (login && login.length >= 4 && !/\s/.test(login) && hours > 0) {
                   tisMap.set(login.toLowerCase(), hours);
                 }
               });
+            } else {
+              console.warn('[BP] No table found in TIS response');
             }
           } catch (e) {
             console.warn('[BP] TIS parse error:', e);
@@ -207,12 +217,15 @@
           console.log('[BP] TIS data loaded:', tisMap.size, 'associates');
           resolve(tisMap);
         },
-        onerror: () => resolve(new Map()),
+        onerror: (err) => {
+          console.warn('[BP] TIS fetch failed:', err);
+          resolve(new Map());
+        },
       });
     });
   }
 
-  function buildPanel(associates, tisMap) {
+  function buildPanel(associates) {
     if (document.querySelector('.bp-panel')) document.querySelector('.bp-panel').remove();
 
     // Sort by UPH and get bottom 15%
@@ -229,17 +242,12 @@
     panel.className = 'bp-panel';
     let rows = '';
     bottom15.forEach(a => {
-      const tisHours = tisMap.get(a.login.toLowerCase());
-      const tisHtml = tisHours
-        ? `<span style="background:#ff9800;color:#000;padding:1px 5px;border-radius:4px;font-size:9px;font-weight:700;">${tisHours.toFixed(1)}h</span>`
-        : '<span style="color:#78909c;font-size:9px;">—</span>';
       rows += `<tr>
         <td class="bp-login">${a.login}</td>
         <td class="bp-name">${a.name}</td>
         <td class="bp-name">${a.manager}</td>
         <td class="bp-hours">${a.paidHoursTotal.toFixed(1)}</td>
         <td class="bp-uph">${a.uph.toFixed(1)}</td>
-        <td>${tisHtml}</td>
       </tr>`;
     });
 
@@ -252,9 +260,13 @@
           <div class="bp-stat"><div class="val">${avgUPH}</div><div class="lbl">AVG UPH</div></div>
         </div>
         <div class="bp-results">
-          <div style="margin-bottom:6px;"><label style="color:#aab7c4;font-size:10px;">Sort by: </label><select id="bp-sort" style="background:#3a4553;color:#fff;border:1px solid #556;border-radius:3px;padding:2px 6px;font-size:10px;font-family:'Amazon Ember',Arial,sans-serif;"><option value="uph">UPH (lowest first)</option><option value="manager">Manager (A→Z)</option><option value="name">Name (A→Z)</option><option value="hours">Hours (highest first)</option></select></div>
+          <div style="margin-bottom:6px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+            <label style="color:#aab7c4;font-size:10px;">Sort by: </label><select id="bp-sort" style="background:#3a4553;color:#fff;border:1px solid #556;border-radius:3px;padding:2px 6px;font-size:10px;font-family:'Amazon Ember',Arial,sans-serif;"><option value="uph">UPH (lowest first)</option><option value="manager">Manager (A→Z)</option><option value="name">Name (A→Z)</option><option value="hours">Hours (highest first)</option></select>
+            <button id="bp-mgr-filter-btn" style="background:#3a4553;color:#ff9900;border:1px solid #ff9900;border-radius:3px;padding:2px 8px;font-size:10px;cursor:pointer;font-family:'Amazon Ember',Arial,sans-serif;">Filter Managers ▼</button>
+          </div>
+          <div id="bp-mgr-filter" style="display:none;margin-bottom:8px;padding:6px;background:#2a3544;border-radius:4px;max-height:120px;overflow-y:auto;"></div>
           <table>
-            <thead><tr><th id="bp-th-login" style="cursor:pointer;">Login ↕</th><th id="bp-th-name" style="cursor:pointer;">Name ↕</th><th id="bp-th-mgr" style="cursor:pointer;">Manager ↕</th><th id="bp-th-hours" style="cursor:pointer;">Hours ↕</th><th id="bp-th-uph" style="cursor:pointer;">UPH ↕</th><th>TIS Hrs</th></tr></thead>
+            <thead><tr><th id="bp-th-login" style="cursor:pointer;">Login ↕</th><th id="bp-th-name" style="cursor:pointer;">Name ↕</th><th id="bp-th-mgr" style="cursor:pointer;">Manager ↕</th><th id="bp-th-hours" style="cursor:pointer;">Hours ↕</th><th id="bp-th-uph" style="cursor:pointer;">UPH ↕</th></tr></thead>
             <tbody id="bp-tbody">${rows}</tbody>
           </table>
         </div>
@@ -315,30 +327,52 @@
       resortTable('uph');
     });
 
-    function resortTable(sortBy) {
-      let sorted = [...bottom15];
-      if (sortBy === 'manager') sorted.sort((a, b) => a.manager.localeCompare(b.manager));
-      else if (sortBy === 'name') sorted.sort((a, b) => a.name.localeCompare(b.name));
-      else if (sortBy === 'login') sorted.sort((a, b) => a.login.localeCompare(b.login));
-      else if (sortBy === 'hours') sorted.sort((a, b) => b.paidHoursTotal - a.paidHoursTotal);
-      else sorted.sort((a, b) => a.uph - b.uph);
+    // Manager filter
+    const managers = [...new Set(bottom15.map(a => a.manager))].sort();
+    const selectedManagers = new Set(managers);
+    const filterDiv = document.getElementById('bp-mgr-filter');
+    const filterBtn = document.getElementById('bp-mgr-filter-btn');
+
+    filterDiv.innerHTML = managers.map(m =>
+      `<label style="display:block;color:#fff;font-size:10px;padding:1px 0;cursor:pointer;"><input type="checkbox" class="bp-mgr-cb" data-mgr="${m}" checked style="margin-right:4px;">${m}</label>`
+    ).join('');
+
+    filterBtn.addEventListener('click', () => {
+      filterDiv.style.display = filterDiv.style.display === 'none' ? 'block' : 'none';
+    });
+
+    filterDiv.querySelectorAll('.bp-mgr-cb').forEach(cb => {
+      cb.addEventListener('change', () => {
+        if (cb.checked) selectedManagers.add(cb.dataset.mgr);
+        else selectedManagers.delete(cb.dataset.mgr);
+        filterAndSort();
+      });
+    });
+
+    function filterAndSort() {
+      const filtered = bottom15.filter(a => selectedManagers.has(a.manager));
+      const sortBy = document.getElementById('bp-sort').value;
+      if (sortBy === 'manager') filtered.sort((a, b) => a.manager.localeCompare(b.manager));
+      else if (sortBy === 'name') filtered.sort((a, b) => a.name.localeCompare(b.name));
+      else if (sortBy === 'login') filtered.sort((a, b) => a.login.localeCompare(b.login));
+      else if (sortBy === 'hours') filtered.sort((a, b) => b.paidHoursTotal - a.paidHoursTotal);
+      else filtered.sort((a, b) => a.uph - b.uph);
 
       let newRows = '';
-      sorted.forEach(a => {
-        const tisHours = tisMap.get(a.login.toLowerCase());
-        const tisHtml = tisHours
-          ? `<span style="background:#ff9800;color:#000;padding:1px 5px;border-radius:4px;font-size:9px;font-weight:700;">${tisHours.toFixed(1)}h</span>`
-          : '<span style="color:#78909c;font-size:9px;">—</span>';
+      filtered.forEach(a => {
         newRows += `<tr>
           <td class="bp-login">${a.login}</td>
           <td class="bp-name">${a.name}</td>
           <td class="bp-name">${a.manager}</td>
           <td class="bp-hours">${a.paidHoursTotal.toFixed(1)}</td>
           <td class="bp-uph">${a.uph.toFixed(1)}</td>
-          <td>${tisHtml}</td>
         </tr>`;
       });
       document.getElementById('bp-tbody').innerHTML = newRows;
+    }
+
+    function resortTable(sortBy) {
+      filterAndSort();
     }
 
     // Highlight rows in the original table
@@ -357,41 +391,26 @@
   }
 
   function init() {
-    console.log('[BP] Script loaded, watching for data table...');
-    // Watch continuously for the data table to appear (it loads after user clicks HTML)
-    const observer = new MutationObserver(async () => {
-      if (document.querySelector('.bp-panel')) return; // already built
-      const tables = document.querySelectorAll('table');
-      for (const t of tables) {
-        const rows = t.querySelectorAll('tr');
-        if (rows.length > 10) {
-          // Check if this table has login-like data
-          const cells = rows[3]?.querySelectorAll('td');
-          if (cells && cells.length > 13) {
-            const login = cells[6]?.textContent.trim();
-            if (login && /^[a-z][a-z0-9]{3,11}$/.test(login)) {
-              console.log('[BP] Found data table, parsing all tabs...');
-              const associates = await parseAllTabs();
-              console.log('[BP] Parsed associates:', associates.length);
-              if (associates.length > 0) {
-                buildPanel(associates);
-                observer.disconnect();
-              }
-              return;
-            }
-          }
-        }
+    console.log('[BP] Script loaded — adding button');
+    
+    // Add a "Show Bottom 15%" button to the page
+    const btn = document.createElement('button');
+    btn.textContent = '📉 Show Bottom 15%';
+    btn.style.cssText = 'position:fixed;bottom:12px;left:12px;z-index:99999;background:#ff5252;color:#fff;border:none;border-radius:6px;padding:8px 16px;font-size:13px;font-weight:700;cursor:pointer;font-family:"Amazon Ember",Arial,sans-serif;box-shadow:0 2px 8px rgba(0,0,0,0.3);';
+    btn.addEventListener('click', async () => {
+      btn.textContent = '⏳ Loading...';
+      btn.disabled = true;
+      const associates = parseTable();
+      console.log('[BP] Parsed:', associates.length, 'associates');
+      if (associates.length > 0) {
+        buildPanel(associates);
+      } else {
+        alert('No associate data found. Make sure you\'ve loaded the HTML report first.');
       }
+      btn.textContent = '📉 Show Bottom 15%';
+      btn.disabled = false;
     });
-    observer.observe(document.body, { childList: true, subtree: true });
-
-    // Also try immediately in case data is already loaded
-    setTimeout(async () => {
-      if (document.querySelector('.bp-panel')) return;
-      const associates = await parseAllTabs();
-      console.log('[BP] Total associates from all tabs:', associates.length);
-      if (associates.length > 0) buildPanel(associates);
-    }, 3000);
+    document.body.appendChild(btn);
   }
 
   // --- ROUTER ---
