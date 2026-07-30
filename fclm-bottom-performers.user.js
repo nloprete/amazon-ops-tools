@@ -174,6 +174,9 @@
       if (login && paidHoursTotal > 0) {
         associates.push({ login, name, manager, paidHoursTotal, uph, rowIdx });
       }
+      if (rowIdx < 3) {
+        console.log('[BP] Row', rowIdx, '| login:', login, '| name:', name, '| hours:', paidHoursTotal, '| uph:', uph, '| totalCells:', cells.length);
+      }
       rowIdx++;
     });
 
@@ -251,6 +254,7 @@
       if (rows.length > 10 || polls >= 20) {
         clearInterval(poller);
         const associates = parseTable();
+        console.log('[BP] Parsed associates:', associates.length);
         if (associates.length > 0) {
           buildPanel(associates);
         }
