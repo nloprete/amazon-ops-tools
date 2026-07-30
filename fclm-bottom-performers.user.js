@@ -89,95 +89,32 @@
   `);
 
   function parseTable() {
-    const table = document.querySelector('table');
+    // Find the largest table on the page
+    const tables = document.querySelectorAll('table');
+    let table = null;
+    for (const t of tables) {
+      if (!table || t.querySelectorAll('tr').length > table.querySelectorAll('tr').length) table = t;
+    }
     if (!table) return [];
 
-    // Find header indices
-    const headers = [...table.querySelectorAll('tr')];
-    let loginCol = -1;
-    let nameCol = -1;
-    let paidHoursTotalCol = -1;
-    let uphCol = -1;
-
-    // The table has multi-row headers — scan all th cells
-    const allTh = table.querySelectorAll('th');
-    const thTexts = [];
-    allTh.forEach((th, idx) => thTexts.push({ text: th.textContent.trim().toLowerCase(), idx }));
-
-    // Find columns in data rows by checking the first data row
-    const dataRows = table.querySelectorAll('tr');
-    let headerRowCount = 0;
-    for (const row of dataRows) {
-      if (row.querySelectorAll('th').length > 0) { headerRowCount++; continue; }
-      break;
-    }
-
-    // Parse actual data rows
     const associates = [];
-    let rowIdx = 0;
-    dataRows.forEach(row => {
-      if (row.querySelectorAll('th').length > 0) return; // skip header rows
+    const rows = table.querySelectorAll('tr');
+
+    rows.forEach(row => {
       const cells = row.querySelectorAll('td');
-      if (cells.length < 10) return;
+      if (cells.length < 14) return;
 
-      // Based on the screenshot structure:
-      // Col 0: Type, Col 1: ID, Col 2: Name, Col 3: Manager
-      // Col 4: Defect DPMO, Col 5: Shift Code, Col 6: Login
-      // Paid Hours: Small(7), Medium(8), Large(9), HeavyBulky(10), Total(11)
-      // Jobs(12), JPH(13)
-      // Then FACH sections... FACH-Total is near the end
-
+      // Col 6 = Login, Col 2 = Name, Col 3 = Manager, Col 11 = Hours Total, Col 13 = UPH
       const login = cells[6]?.textContent.trim();
       const name = cells[2]?.textContent.trim();
       const manager = cells[3]?.textContent.trim();
       const paidHoursTotal = parseFloat(cells[11]?.textContent.trim()) || 0;
+      const uph = parseFloat(cells[13]?.textContent.trim()) || 0;
 
-      // Find FACH-Total UPH — it's typically one of the last UPH columns
-      // Look for it by scanning from the right for a reasonable UPH value
-      let uph = 0;
-
-      // The FACH-Total section has UNIT and UPH columns
-      // Based on typical FCLM layout, FACH-Total UPH is around col 28-32
-      // Let's find it: scan cells for header pattern
-      // Simpler: just grab all numeric cells and find the UPH pattern
-      // UPH is typically 50-500 range for stow
-
-      // Try specific columns based on screenshot (FACH-Total UPH)
-      // Count from visible structure: after Jobs/JPH, there are FACH sections
-      // FACH-Small(UNIT,UPH), FACH-Medium(UNIT,UPH), FACH-Large(UNIT,UPH), FACH-HeavyBulky(UNIT,UPH), FACH-Total(UNIT,UPH), Case(UNIT,UPH)
-      // So FACH-Total UPH = col 14 + (4*2) + 1 = col 23? Let's try multiple
-
-      // Better approach: find all cells, check which ones have "EACH-Total" in their column header
-      // For now, let's try the last few columns and look for a UPH-like value
-      for (let i = cells.length - 1; i >= 14; i--) {
-        const val = parseFloat(cells[i]?.textContent.trim());
-        if (val > 0 && val < 1000) {
-          // Check if the cell 1 position before has a larger number (UNIT) — confirming this is UPH
-          const prev = parseFloat(cells[i - 1]?.textContent.trim());
-          if (prev > val && prev >= 10) {
-            uph = val;
-            break;
-          }
-        }
+      // Only include rows with a valid login (lowercase, 4-12 chars)
+      if (login && /^[a-z][a-z0-9]{3,11}$/.test(login) && paidHoursTotal > 0) {
+        associates.push({ login, name, manager, paidHoursTotal, uph });
       }
-
-      // Fallback: try column indices commonly seen for FACH-Total UPH
-      if (!uph) {
-        [23, 25, 27, 29, 31].forEach(col => {
-          if (!uph && cells[col]) {
-            const val = parseFloat(cells[col]?.textContent.trim());
-            if (val > 10 && val < 600) uph = val;
-          }
-        });
-      }
-
-      if (login && paidHoursTotal > 0) {
-        associates.push({ login, name, manager, paidHoursTotal, uph, rowIdx });
-      }
-      if (rowIdx < 3) {
-        console.log('[BP] Row', rowIdx, '| login:', login, '| name:', name, '| hours:', paidHoursTotal, '| uph:', uph, '| totalCells:', cells.length);
-      }
-      rowIdx++;
     });
 
     return associates;
