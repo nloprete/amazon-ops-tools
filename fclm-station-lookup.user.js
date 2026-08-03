@@ -393,7 +393,29 @@
       GM_setValue('sl_minimized', isMin);
     });
 
-    // Panel is fixed in top-right — no dragging
+    // Panel is draggable but resets position on page load
+    const titleBar = panel.querySelector('.sl-title');
+    let isDragging = false, offsetX = 0, offsetY = 0;
+
+    titleBar.addEventListener('mousedown', (e) => {
+      if (e.target.classList.contains('sl-minimize-btn')) return;
+      isDragging = true;
+      offsetX = e.clientX - panel.getBoundingClientRect().left;
+      offsetY = e.clientY - panel.getBoundingClientRect().top;
+      panel.style.right = 'auto';
+      e.preventDefault();
+      e.stopPropagation();
+    }, true);
+
+    window.addEventListener('mousemove', (e) => {
+      if (!isDragging) return;
+      e.preventDefault();
+      e.stopPropagation();
+      panel.style.left = Math.max(0, e.clientX - offsetX) + 'px';
+      panel.style.top = Math.max(0, e.clientY - offsetY) + 'px';
+    }, true);
+
+    window.addEventListener('mouseup', () => { isDragging = false; }, true);
 
     // Search
     document.getElementById('sl-search').addEventListener('click', doSearch);
