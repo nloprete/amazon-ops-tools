@@ -202,7 +202,28 @@
       }
     }
 
-    return { stations, etiRate, hoursElapsed, currentVolume };
+    // Scrape IB total hours from "Each Transfer In - Total" row (Hours column, second number)
+    let ibHours = null;
+    for (const row of rows) {
+      const rowText = row.textContent || '';
+      if (/each\s*transfer\s*in\s*-?\s*total/i.test(rowText)) {
+        const cells = row.querySelectorAll('td, [role="cell"], span, div');
+        const numbers = [];
+        for (const cell of cells) {
+          const cellText = cell.textContent.trim();
+          if (/^[\d,]+\.?\d*$/.test(cellText) && cellText.length <= 10) {
+            numbers.push(parseFloat(cellText.replace(/,/g, '')));
+          }
+        }
+        // Hours is the second number (Volume, Hours, Rate)
+        if (numbers.length >= 3) {
+          ibHours = numbers[1];
+        }
+        break;
+      }
+    }
+
+    return { stations, etiRate, hoursElapsed, currentVolume, ibHours };
   }
 
   // --- Build Panel ---
@@ -226,6 +247,8 @@
           <div class="vp-row"><span class="vp-label">Shift</span><span class="vp-value" id="vp-shift-bc">...</span></div>
           <div class="vp-divider"></div>
           <div class="vp-row"><span class="vp-label">Current Vol</span><span class="vp-value" id="vp-current-vol-bc">...</span></div>
+          <div class="vp-row"><span class="vp-label">IB Hours</span><span class="vp-value" id="vp-ibhrs-bc">...</span></div>
+          <div class="vp-row"><span class="vp-label">Proj Final Hrs</span><span class="vp-value" id="vp-projhrs-bc">...</span></div>
           <div class="vp-divider"></div>
           <div class="vp-result-label" style="color:#69f0ae;">Remaining Potential</div>
           <div class="vp-result" style="color:#69f0ae;" id="vp-projection-bc">...</div>
@@ -241,6 +264,8 @@
           <div class="vp-row"><span class="vp-label">Shift</span><span class="vp-value" id="vp-shift">...</span></div>
           <div class="vp-divider"></div>
           <div class="vp-row"><span class="vp-label">Current Vol</span><span class="vp-value" id="vp-current-vol">...</span></div>
+          <div class="vp-row"><span class="vp-label">IB Hours</span><span class="vp-value" id="vp-ibhrs">...</span></div>
+          <div class="vp-row"><span class="vp-label">Proj Final Hrs</span><span class="vp-value" id="vp-projhrs">...</span></div>
           <div class="vp-divider"></div>
           <div class="vp-result-label">Remaining Potential</div>
           <div class="vp-result" id="vp-projection">...</div>
@@ -256,6 +281,8 @@
           <div class="vp-row"><span class="vp-label">Shift</span><span class="vp-value" id="vp-shift-wc">...</span></div>
           <div class="vp-divider"></div>
           <div class="vp-row"><span class="vp-label">Current Vol</span><span class="vp-value" id="vp-current-vol-wc">...</span></div>
+          <div class="vp-row"><span class="vp-label">IB Hours</span><span class="vp-value" id="vp-ibhrs-wc">...</span></div>
+          <div class="vp-row"><span class="vp-label">Proj Final Hrs</span><span class="vp-value" id="vp-projhrs-wc">...</span></div>
           <div class="vp-divider"></div>
           <div class="vp-result-label" style="color:#ff5252;">Remaining Potential</div>
           <div class="vp-result" style="color:#ff5252;" id="vp-projection-wc">...</div>
@@ -337,7 +364,7 @@
   }
 
   function updatePanel() {
-    const { stations, etiRate, hoursElapsed, currentVolume } = scrapePageData();
+    const { stations, etiRate, hoursElapsed, currentVolume, ibHours } = scrapePageData();
     const { remaining, shiftName, elapsed, shiftHours } = getShiftInfo();
 
     const stationsEl = document.getElementById('vp-stations');
@@ -383,6 +410,13 @@
     shiftEl.textContent = shiftName;
     currentVolEl.textContent = currentVolume ? currentVolume.toLocaleString() : '—';
 
+    // IB Hours and projected final hours
+    const ibHrsEl = document.getElementById('vp-ibhrs');
+    const projHrsEl = document.getElementById('vp-projhrs');
+    if (ibHrsEl) ibHrsEl.textContent = ibHours ? ibHours.toFixed(1) : '—';
+    const projectedFinalHrs = (ibHours && stations && hrsLeft) ? ibHours + (stations * hrsLeft) : null;
+    if (projHrsEl) projHrsEl.textContent = projectedFinalHrs ? projectedFinalHrs.toFixed(1) : '—';
+
     if (stations && etiRate && hrsLeft > 0) {
       const projection = Math.round(hrsLeft * stations * etiRate);
       projectionEl.textContent = projection.toLocaleString();
@@ -421,6 +455,8 @@
     document.getElementById('vp-remaining-wc').textContent = hrsLeft ? hrsLeft.toFixed(1) + 'h' : '—';
     document.getElementById('vp-shift-wc').textContent = shiftName;
     document.getElementById('vp-current-vol-wc').textContent = currentVolume ? currentVolume.toLocaleString() : '—';
+    document.getElementById('vp-ibhrs-wc').textContent = ibHours ? ibHours.toFixed(1) : '—';
+    document.getElementById('vp-projhrs-wc').textContent = projectedFinalHrs ? (projectedFinalHrs * 0.85).toFixed(1) : '—';
 
     // Fill best case static values
     document.getElementById('vp-stations-bc').textContent = stations ? Math.round(stations * 1.05).toLocaleString() : '—';
@@ -429,6 +465,8 @@
     document.getElementById('vp-remaining-bc').textContent = hrsLeft ? hrsLeft.toFixed(1) + 'h' : '—';
     document.getElementById('vp-shift-bc').textContent = shiftName;
     document.getElementById('vp-current-vol-bc').textContent = currentVolume ? currentVolume.toLocaleString() : '—';
+    document.getElementById('vp-ibhrs-bc').textContent = ibHours ? ibHours.toFixed(1) : '—';
+    document.getElementById('vp-projhrs-bc').textContent = projectedFinalHrs ? (projectedFinalHrs * 1.05).toFixed(1) : '—';
 
     // Goal comparison
     const goalInput = document.getElementById('vp-goal-input');
