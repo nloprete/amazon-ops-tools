@@ -292,6 +292,14 @@
       </div>
       <div class="vp-divider"></div>
       <div class="vp-row">
+        <span class="vp-label">Planned Hours</span>
+        <input type="number" id="vp-planned-hrs-input" placeholder="Enter hours" style="background:#2a2a4e;border:1px solid #4fc3f7;color:#fff;border-radius:4px;padding:2px 6px;width:90px;font-size:12px;font-weight:700;text-align:right;font-family:'Amazon Ember',Arial,sans-serif;">
+      </div>
+      <div class="vp-row">
+        <span class="vp-label">Hours vs Plan</span>
+        <span class="vp-value" id="vp-hrs-pace">...</span>
+      </div>
+      <div class="vp-row">
         <span class="vp-label">Volume Goal</span>
         <input type="number" id="vp-goal-input" placeholder="Enter goal" style="background:#2a2a4e;border:1px solid #4fc3f7;color:#fff;border-radius:4px;padding:2px 6px;width:90px;font-size:12px;font-weight:700;text-align:right;font-family:'Amazon Ember',Arial,sans-serif;">
       </div>
@@ -333,6 +341,15 @@
 
     window.addEventListener('mouseup', () => {
       isDragging = false;
+    });
+
+    // Planned hours input — save and recalculate on change
+    const plannedHrsInput = panel.querySelector('#vp-planned-hrs-input');
+    const savedPlannedHrs = localStorage.getItem('vp_planned_hrs') || '';
+    if (savedPlannedHrs) plannedHrsInput.value = savedPlannedHrs;
+    plannedHrsInput.addEventListener('input', () => {
+      localStorage.setItem('vp_planned_hrs', plannedHrsInput.value);
+      updatePanel();
     });
 
     // Goal input — save and recalculate on change
@@ -467,6 +484,26 @@
     document.getElementById('vp-current-vol-bc').textContent = currentVolume ? currentVolume.toLocaleString() : '—';
     document.getElementById('vp-ibhrs-bc').textContent = ibHours ? ibHours.toFixed(1) : '—';
     document.getElementById('vp-projhrs-bc').textContent = projectedFinalHrs ? (projectedFinalHrs * 1.05).toFixed(1) : '—';
+
+    // Hours vs Plan comparison
+    const plannedHrsInput = document.getElementById('vp-planned-hrs-input');
+    const hrsPaceEl = document.getElementById('vp-hrs-pace');
+    const plannedHrs = parseFloat(plannedHrsInput?.value) || 0;
+
+    if (plannedHrs > 0 && projectedFinalHrs) {
+      const hrsDiff = projectedFinalHrs - plannedHrs;
+      const hrsPct = Math.round((projectedFinalHrs / plannedHrs) * 100);
+      if (hrsDiff >= 0) {
+        hrsPaceEl.textContent = `+${hrsDiff.toFixed(1)}h (${hrsPct}%)`;
+        hrsPaceEl.style.color = '#69f0ae';
+      } else {
+        hrsPaceEl.textContent = `${hrsDiff.toFixed(1)}h (${hrsPct}%)`;
+        hrsPaceEl.style.color = hrsPct >= 90 ? '#ff9800' : '#ff5252';
+      }
+    } else {
+      hrsPaceEl.textContent = plannedHrs > 0 ? 'Waiting for data...' : 'Enter hours above';
+      hrsPaceEl.style.color = '#78909c';
+    }
 
     // Goal comparison
     const goalInput = document.getElementById('vp-goal-input');
