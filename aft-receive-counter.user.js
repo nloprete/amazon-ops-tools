@@ -382,7 +382,8 @@
       const nightPeriods = [
         { label: 'P1', start: 18, end: 22 },
         { label: 'P2', start: 22, end: 26 },
-        { label: 'P3', start: 26, end: 28.5 }
+        { label: 'P3', start: 26, end: 27 },
+        { label: 'P3 NEXT DAY', start: 27, end: 28.5 }
       ];
 
       function calcPeriodData(periods, isNight) {
@@ -438,8 +439,13 @@
       // Night shift
       periodHtml += '<div style="color:#4fc3f7;font-weight:700;font-size:11px;margin-top:8px;margin-bottom:4px;">🌙 Night (18:00–04:30)</div>';
       let nightTotal = 0;
+      let nextDayTotal = 0;
       nightData.forEach((p, idx) => {
-        nightTotal += p.qty;
+        if (p.label === 'P3 NEXT DAY') {
+          nextDayTotal += p.qty;
+        } else {
+          nightTotal += p.qty;
+        }
         const pct = Math.round((p.qty / maxPeriodQty) * 100);
         periodHtml += `<div style="display:flex;align-items:center;gap:6px;padding:3px 0;font-size:12px;">
           <span style="width:25px;color:#4fc3f7;font-weight:700;">${p.label}</span>
@@ -453,9 +459,15 @@
       });
       periodHtml += `<div style="display:flex;justify-content:space-between;padding:4px 0;margin-top:2px;border-top:1px solid #3a4553;"><span style="color:#4fc3f7;font-weight:700;font-size:11px;">Night Total</span><span style="color:#69f0ae;font-weight:700;font-size:12px;">${nightTotal.toLocaleString()}</span></div>`;
 
-      // Combined total
+      // Combined total (excludes P3 NEXT DAY)
       const grandTotal = dayTotal + nightTotal;
       periodHtml += `<div style="display:flex;justify-content:space-between;padding:6px 0;margin-top:6px;border-top:2px solid #69f0ae;"><span style="color:#69f0ae;font-weight:900;font-size:12px;">Combined Total</span><span style="color:#69f0ae;font-weight:900;font-size:14px;">${grandTotal.toLocaleString()}</span></div>`;
+
+      // Next Day total
+      if (nextDayTotal > 0) {
+        periodHtml += `<div style="display:flex;justify-content:space-between;padding:4px 0;margin-top:4px;border-top:1px solid #ff9800;"><span style="color:#ff9800;font-weight:700;font-size:11px;">Next Day</span><span style="color:#ff9800;font-weight:700;font-size:12px;">${nextDayTotal.toLocaleString()}</span></div>`;
+      }
+
       periodHtml += `<div style="font-size:9px;color:#78909c;margin-top:4px;font-style:italic;">*Total does not include trailers missing on AFT</div>`;
 
       periodHtml += '</div>';
