@@ -17,8 +17,8 @@
   GM_addStyle(`
     .vol-proj-panel {
       position: fixed;
-      bottom: 12px;
-      right: 12px;
+      top: 12px;
+      left: 12px;
       z-index: 99999;
       background: #1a1a2e;
       color: #fff;
