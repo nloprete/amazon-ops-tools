@@ -7,6 +7,7 @@
 // @downloadURL  https://raw.githubusercontent.com/nloprete/amazon-ops-tools/main/aft-receive-counter.user.js
 // @match        https://afttransshipmenthub-na.aka.amazon.com/*/view-transfers/inbound*
 // @connect      maple-syrup.corp.amazon.com
+// @connect      fclm-portal.amazon.com
 // @grant        GM_addStyle
 // @grant        GM_xmlhttpRequest
 // ==/UserScript==
@@ -26,7 +27,7 @@
       padding: 10px 14px;
       font-family: "Amazon Ember", Arial, sans-serif;
       box-shadow: 0 4px 16px rgba(0,0,0,0.3);
-      width: 820px;
+      width: 1050px;
       max-height: 80vh;
       border: 2px solid #ff9900;
       display: flex;
@@ -256,7 +257,7 @@
     const defaults = getDefaultTimes();
     const panel = document.createElement('div');
     panel.className = 'aft-panel';
-    panel.innerHTML = '<div class="aft-title">📦 Daily Receive<button class="aft-min-btn">▲</button></div><div class="aft-body"><div class="aft-inputs"><label>From:</label><input type="datetime-local" class="aft-input" id="aft-start" value="' + defaults.startStr + '"><label>To:</label><input type="datetime-local" class="aft-input" id="aft-end" value="' + defaults.endStr + '"></div><div class="aft-summary"><div class="aft-stat"><div class="val" id="aft-total">...</div><div class="lbl">TOTAL QTY</div></div><div class="aft-stat"><div class="val" id="aft-loads" style="color:#4fc3f7">...</div><div class="lbl">LOADS</div></div><div class="aft-stat"><div class="val" id="aft-missing-count" style="color:#ff5252">...</div><div class="lbl">MISSING</div></div></div><div style="display:flex;gap:24px;flex:1;min-height:0;overflow:hidden;"><div id="aft-hourly-section" style="flex:1;overflow-y:auto;min-width:0;"></div><div id="aft-period-section" style="flex:0.7;overflow-y:auto;min-width:0;"></div><div id="aft-results" style="flex:1;overflow-y:auto;min-width:0;"></div><div id="aft-missing-section" style="flex:1;overflow-y:auto;min-width:0;"></div></div><button class="aft-refresh" id="aft-refresh">↻ Refresh</button><div class="aft-time-range" id="aft-range"></div></div>';
+    panel.innerHTML = '<div class="aft-title">📦 Daily Receive<button class="aft-min-btn">▲</button></div><div class="aft-body"><div class="aft-inputs"><label>From:</label><input type="datetime-local" class="aft-input" id="aft-start" value="' + defaults.startStr + '"><label>To:</label><input type="datetime-local" class="aft-input" id="aft-end" value="' + defaults.endStr + '"></div><div class="aft-summary"><div class="aft-stat"><div class="val" id="aft-total">...</div><div class="lbl">TOTAL QTY</div></div><div class="aft-stat"><div class="val" id="aft-loads" style="color:#4fc3f7">...</div><div class="lbl">LOADS</div></div><div class="aft-stat"><div class="val" id="aft-missing-count" style="color:#ff5252">...</div><div class="lbl">MISSING</div></div><div class="aft-stat"><div class="val" id="aft-stow-total" style="color:#b388ff">...</div><div class="lbl">STOW VOL</div></div></div><div style="display:flex;gap:24px;flex:1;min-height:0;overflow:hidden;"><div id="aft-hourly-section" style="flex:1;overflow-y:auto;min-width:0;"></div><div id="aft-stow-section" style="flex:1;overflow-y:auto;min-width:0;"></div><div id="aft-period-section" style="flex:0.7;overflow-y:auto;min-width:0;"></div><div id="aft-results" style="flex:1;overflow-y:auto;min-width:0;"></div><div id="aft-missing-section" style="flex:1;overflow-y:auto;min-width:0;"></div></div><button class="aft-refresh" id="aft-refresh">↻ Refresh</button><div class="aft-time-range" id="aft-range"></div></div>';
     document.body.appendChild(panel);
 
     panel.querySelector('.aft-min-btn').addEventListener('click', () => {
@@ -499,6 +500,9 @@
 
     // Fetch KIPS to find missing trailers
     checkMissingTrailers(loads);
+
+    // Fetch FCLM stow volume (Each Transfer In - Total), hourly across the window
+    loadStowVolume();
   }
 
   // --- KIPS cross-reference ---
@@ -595,6 +599,137 @@
     } else {
       missingSection.innerHTML = '<div style="color:#69f0ae;padding:8px;text-align:center;font-weight:700;">✓ All KIPS trailers accounted for</div>';
     }
+  }
+
+  // --- FCLM Stow Volume (Each Transfer In - Total) ---
+  function pad2(n) { return String(n).padStart(2, '0'); }
+
+  // Build the FCLM processPathRollup URL for a single 1-hour span.
+  function buildFclmUrl(spanStart, spanEnd) {
+    const dateStr = d => d.getFullYear() + '%2F' + pad2(d.getMonth() + 1) + '%2F' + pad2(d.getDate());
+    const params =
+      'reportFormat=HTML' +
+      '&warehouseId=RIC4' +
+      '&maxIntradayDays=1' +
+      '&spanType=Intraday' +
+      '&startDateIntraday=' + dateStr(spanStart) +
+      '&startHourIntraday=' + spanStart.getHours() +
+      '&startMinuteIntraday=0' +
+      '&endDateIntraday=' + dateStr(spanEnd) +
+      '&endHourIntraday=' + spanEnd.getHours() +
+      '&endMinuteIntraday=0' +
+      '&_adjustPlanHours=on' +
+      '&_hideEmptyLineItems=on' +
+      '&_rememberViewForWarehouse=on' +
+      '&employmentType=AllEmployees';
+    return 'https://fclm-portal.amazon.com/reports/processPathRollup?' + params;
+  }
+
+  // Fetch one hour's rollup and return the "Each Transfer In - Total" units value.
+  function fetchStowHour(spanStart, spanEnd) {
+    return new Promise((resolve) => {
+      GM_xmlhttpRequest({
+        method: 'GET',
+        url: buildFclmUrl(spanStart, spanEnd),
+        withCredentials: true,
+        onload: (resp) => {
+          try {
+            const html = resp.responseText || '';
+            // If we got bounced to Midway auth, there's no report table.
+            if (/midway-auth\.amazon\.com|SSO\/redirect/i.test(html) && !/Each Transfer In/i.test(html)) {
+              resolve({ qty: 0, authError: true });
+              return;
+            }
+            const doc = new DOMParser().parseFromString(html, 'text/html');
+            const rows = [...doc.querySelectorAll('tr')];
+            let qty = 0;
+            let found = false;
+            for (const row of rows) {
+              const cells = [...row.querySelectorAll('td, th')];
+              if (!cells.length) continue;
+              const label = (cells[0].textContent || '').trim();
+              if (/each\s*transfer\s*in\s*-\s*total/i.test(label)) {
+                // Find the first numeric cell after the label = Volume/Units.
+                for (let i = 1; i < cells.length; i++) {
+                  const raw = (cells[i].textContent || '').trim().replace(/,/g, '');
+                  if (/^\d+(\.\d+)?$/.test(raw)) {
+                    qty = Math.round(parseFloat(raw));
+                    found = true;
+                    break;
+                  }
+                }
+                if (found) break;
+              }
+            }
+            resolve({ qty, authError: false });
+          } catch (e) {
+            resolve({ qty: 0, authError: false });
+          }
+        },
+        onerror: () => resolve({ qty: 0, authError: false }),
+        ontimeout: () => resolve({ qty: 0, authError: false }),
+      });
+    });
+  }
+
+  let stowFetchToken = 0;
+  async function loadStowVolume() {
+    const section = document.getElementById('aft-stow-section');
+    const totalEl = document.getElementById('aft-stow-total');
+    if (!section) return;
+
+    const myToken = ++stowFetchToken;
+
+    const { start } = getShiftWindow();
+    // Always report a full 24-hour grid from the shift start (03:00 -> 03:00 next day).
+    const hours = [];
+    for (let i = 0; i < 24; i++) {
+      const hStart = new Date(start);
+      hStart.setHours(start.getHours() + i, 0, 0, 0);
+      const hEnd = new Date(hStart);
+      hEnd.setHours(hStart.getHours() + 1, 0, 0, 0);
+      hours.push({ hStart, hEnd });
+    }
+
+    section.innerHTML = '<div style="color:#78909c;padding:8px;text-align:center;">⏳ Loading stow volume…</div>';
+
+    const results = [];
+    let authError = false;
+    // Fetch sequentially to be gentle on FCLM and keep auth stable.
+    for (const h of hours) {
+      const r = await fetchStowHour(h.hStart, h.hEnd);
+      if (myToken !== stowFetchToken) return; // a newer refresh superseded this run
+      if (r.authError) authError = true;
+      results.push({ ...h, qty: r.qty });
+    }
+    if (myToken !== stowFetchToken) return;
+
+    if (authError && results.every(r => r.qty === 0)) {
+      section.innerHTML = '<div style="margin-top:8px;padding-top:8px;border-top:2px solid #b388ff;"><div style="color:#b388ff;font-weight:700;font-size:13px;margin-bottom:8px;">📥 Stow Volume</div><div style="color:#ff5252;padding:8px;font-size:11px;">Not signed in to FCLM (Midway). Open fclm-portal.amazon.com in a tab, sign in, then Refresh.</div></div>';
+      if (totalEl) totalEl.textContent = '—';
+      return;
+    }
+
+    const stowTotal = results.reduce((s, r) => s + r.qty, 0);
+    const maxQty = Math.max(...results.map(r => r.qty), 1);
+    if (totalEl) totalEl.textContent = stowTotal.toLocaleString();
+
+    let html = '<div style="margin-top:8px;padding-top:8px;border-top:2px solid #b388ff;">';
+    html += '<div style="color:#b388ff;font-weight:700;font-size:13px;margin-bottom:8px;">📥 Stow Volume (hourly)</div>';
+    results.forEach(r => {
+      const label = pad2(r.hStart.getHours()) + ':00';
+      const pct = Math.round((r.qty / maxQty) * 100);
+      html += `<div style="display:flex;align-items:center;gap:8px;padding:4px 0;font-size:12px;">
+        <span style="width:45px;color:#aab7c4;font-weight:600;">${label}</span>
+        <div style="flex:1;background:#3a4553;border-radius:4px;height:18px;overflow:hidden;">
+          <div style="width:${pct}%;height:100%;background:#b388ff;border-radius:4px;transition:width 0.3s;"></div>
+        </div>
+        <span style="width:65px;text-align:right;color:#69f0ae;font-weight:700;font-size:13px;">${r.qty.toLocaleString()}</span>
+      </div>`;
+    });
+    html += `<div style="display:flex;justify-content:space-between;padding:6px 0;margin-top:6px;border-top:2px solid #b388ff;"><span style="color:#b388ff;font-weight:900;font-size:12px;">Stow Total</span><span style="color:#69f0ae;font-weight:900;font-size:14px;">${stowTotal.toLocaleString()}</span></div>`;
+    html += '</div>';
+    section.innerHTML = html;
   }
 
   function init() {
