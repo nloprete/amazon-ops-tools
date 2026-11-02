@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AFT - Daily Receive Counter (3AM to 3AM)
 // @namespace    http://tampermonkey.net/
-// @version      1.0
+// @version      1.0.2
 // @description  Shows VRIDs, dates, and quantities received for the current day (3AM to 3AM). Hides closed trailers.
 // @updateURL    https://raw.githubusercontent.com/nloprete/amazon-ops-tools/main/aft-receive-counter.user.js
 // @downloadURL  https://raw.githubusercontent.com/nloprete/amazon-ops-tools/main/aft-receive-counter.user.js
@@ -70,8 +70,22 @@
       margin-bottom: 6px;
     }
     .aft-stat { text-align: center; }
+    .aft-goal-group { display: flex; align-items: flex-start; gap: 16px; }
     .aft-stat .val { font-size: 18px; font-weight: 700; color: #ff9900; }
     .aft-stat .lbl { font-size: 9px; color: #aab7c4; }
+    .aft-goal-input {
+      background: #3a4553;
+      border: 1px solid #556;
+      color: #ff9900;
+      border-radius: 3px;
+      padding: 0 4px;
+      font-size: 18px;
+      font-weight: 700;
+      font-family: "Amazon Ember", Arial, sans-serif;
+      width: 110px;
+      text-align: center;
+    }
+    .aft-goal-input:focus { outline: none; border-color: #ff9900; }
     .aft-results {
       overflow-y: auto;
       flex: 1;
@@ -257,7 +271,7 @@
     const defaults = getDefaultTimes();
     const panel = document.createElement('div');
     panel.className = 'aft-panel';
-    panel.innerHTML = '<div class="aft-title">📦 Daily Receive<button class="aft-min-btn">▲</button></div><div class="aft-body"><div class="aft-inputs"><label>From:</label><input type="datetime-local" class="aft-input" id="aft-start" value="' + defaults.startStr + '"><label>To:</label><input type="datetime-local" class="aft-input" id="aft-end" value="' + defaults.endStr + '"></div><div class="aft-summary"><div class="aft-stat"><div class="val" id="aft-total">...</div><div class="lbl">TOTAL QTY</div></div><div class="aft-stat"><div class="val" id="aft-loads" style="color:#4fc3f7">...</div><div class="lbl">LOADS</div></div><div class="aft-stat"><div class="val" id="aft-missing-count" style="color:#ff5252">...</div><div class="lbl">MISSING</div></div><div class="aft-stat"><div class="val" id="aft-stow-total" style="color:#b388ff">...</div><div class="lbl">STOW VOL</div></div></div><div style="display:flex;gap:24px;flex:1;min-height:0;overflow:hidden;"><div id="aft-hourly-section" style="flex:1;overflow-y:auto;min-width:0;"></div><div id="aft-stow-section" style="flex:1;overflow-y:auto;min-width:0;"></div><div id="aft-period-section" style="flex:0.7;overflow-y:auto;min-width:0;"></div><div id="aft-results" style="flex:1;overflow-y:auto;min-width:0;"></div><div id="aft-missing-section" style="flex:1;overflow-y:auto;min-width:0;"></div></div><button class="aft-refresh" id="aft-refresh">↻ Refresh</button><div class="aft-time-range" id="aft-range"></div></div>';
+    panel.innerHTML = '<div class="aft-title">📦 Daily Receive<button class="aft-min-btn">▲</button></div><div class="aft-body"><div class="aft-inputs"><label>From:</label><input type="datetime-local" class="aft-input" id="aft-start" value="' + defaults.startStr + '"><label>To:</label><input type="datetime-local" class="aft-input" id="aft-end" value="' + defaults.endStr + '"></div><div class="aft-summary"><div class="aft-goal-group"><div class="aft-stat"><div class="val" id="aft-total">...</div><div class="lbl">TOTAL QTY</div></div><div class="aft-stat"><input type="text" inputmode="numeric" class="aft-goal-input" id="aft-goal" placeholder="—" aria-label="S1 Goal"><div class="lbl">S1 GOAL</div></div><div class="aft-stat"><div class="val" id="aft-gap" style="color:#78909c">—</div><div class="lbl">GAP</div></div></div><div class="aft-stat"><div class="val" id="aft-loads" style="color:#4fc3f7">...</div><div class="lbl">LOADS</div></div><div class="aft-stat"><div class="val" id="aft-missing-count" style="color:#ff5252">...</div><div class="lbl">MISSING</div></div><div class="aft-stat"><div class="val" id="aft-stow-total" style="color:#b388ff">...</div><div class="lbl">STOW VOL</div></div></div><div style="display:flex;gap:24px;flex:1;min-height:0;overflow:hidden;"><div id="aft-hourly-section" style="flex:1;overflow-y:auto;min-width:0;"></div><div id="aft-stow-section" style="flex:1;overflow-y:auto;min-width:0;"></div><div id="aft-period-section" style="flex:0.7;overflow-y:auto;min-width:0;"></div><div id="aft-results" style="flex:1;overflow-y:auto;min-width:0;"></div><div id="aft-missing-section" style="flex:1;overflow-y:auto;min-width:0;"></div></div><button class="aft-refresh" id="aft-refresh">↻ Refresh</button><div class="aft-time-range" id="aft-range"></div></div>';
     document.body.appendChild(panel);
 
     panel.querySelector('.aft-min-btn').addEventListener('click', () => {
@@ -286,7 +300,51 @@
     document.getElementById('aft-refresh').addEventListener('click', refresh);
     document.getElementById('aft-start').addEventListener('change', refresh);
     document.getElementById('aft-end').addEventListener('change', refresh);
+
+    // S1 Goal: restore saved value, persist + recompute gap on input
+    const goalInput = document.getElementById('aft-goal');
+    const savedGoal = localStorage.getItem(GOAL_KEY);
+    if (savedGoal) goalInput.value = Number(savedGoal).toLocaleString();
+    goalInput.addEventListener('input', () => {
+      const goal = parseGoal(goalInput.value);
+      if (goal > 0) localStorage.setItem(GOAL_KEY, String(goal));
+      else localStorage.removeItem(GOAL_KEY);
+      updateGap();
+    });
+    goalInput.addEventListener('blur', () => {
+      const goal = parseGoal(goalInput.value);
+      if (goal > 0) goalInput.value = goal.toLocaleString();
+    });
+
     refresh();
+  }
+
+  // --- S1 Goal / Gap ---
+  const GOAL_KEY = 'aftReceiveCounter.s1Goal';
+  let lastTotalQty = 0;
+
+  function parseGoal(str) {
+    return parseInt(String(str || '').replace(/\D/g, ''), 10) || 0;
+  }
+
+  function updateGap() {
+    const gapEl = document.getElementById('aft-gap');
+    const goalInput = document.getElementById('aft-goal');
+    if (!gapEl || !goalInput) return;
+    const goal = parseGoal(goalInput.value);
+    if (goal <= 0) {
+      gapEl.textContent = '—';
+      gapEl.style.color = '#78909c';
+      return;
+    }
+    const gap = goal - lastTotalQty;
+    if (gap > 0) {
+      gapEl.textContent = gap.toLocaleString() + ' to go';
+      gapEl.style.color = '#ff5252';
+    } else {
+      gapEl.textContent = '+' + Math.abs(gap).toLocaleString();
+      gapEl.style.color = '#69f0ae';
+    }
   }
 
   function refresh() {
@@ -294,6 +352,8 @@
     const { start, end } = getShiftWindow();
 
     document.getElementById('aft-total').textContent = totalQty.toLocaleString();
+    lastTotalQty = totalQty;
+    updateGap();
     document.getElementById('aft-loads').textContent = totalLoads;
 
     let rows = '';
