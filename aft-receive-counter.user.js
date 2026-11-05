@@ -1,12 +1,13 @@
 // ==UserScript==
 // @name         AFT - Daily Receive Counter (3AM to 3AM)
 // @namespace    http://tampermonkey.net/
-// @version      1.0.5
+// @version      1.0.6
 // @description  Shows VRIDs, dates, and quantities received for the current day (3AM to 3AM). Hides closed trailers.
 // @updateURL    https://raw.githubusercontent.com/nloprete/amazon-ops-tools/main/aft-receive-counter.user.js
 // @downloadURL  https://raw.githubusercontent.com/nloprete/amazon-ops-tools/main/aft-receive-counter.user.js
 // @match        https://afttransshipmenthub-na.aka.amazon.com/*/view-transfers/inbound*
 // @match        https://oculus.qubit.amazon.dev/transship/*
+// @match        https://prod-na.us-east-1.idx-website.aft.amazon.dev/*
 // @connect      maple-syrup.corp.amazon.com
 // @connect      fclm-portal.amazon.com
 // @connect      oculus.qubit.amazon.dev
@@ -15,6 +16,7 @@
 // @grant        GM_setValue
 // @grant        GM_getValue
 // @grant        GM_addValueChangeListener
+// @grant        GM_openInTab
 // ==/UserScript==
 
 (function () {
@@ -162,6 +164,18 @@
   const YMS_URL = 'https://oculus.qubit.amazon.dev/transship/RIC4';
   const YMS_HOST = 'oculus.qubit.amazon.dev';
   const YMS_MAX_AGE_MS = 48 * 60 * 60 * 1000;
+
+  // --- Dock Master (IDX) VRID -> Appointment Id bridge ---
+  // Oculus keys rows by Dock Master appointment id, AFT by VRID; IDX maps one to the other.
+  const DM_HOST = 'prod-na.us-east-1.idx-website.aft.amazon.dev';
+  const DM_KEY = 'vridToAppt';
+  const DM_SEARCH_URL = 'https://' + DM_HOST + '/en_US/RIC4/search?tab=appointments&ac=VRID&av=';
+  const DM_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+  const DM_NULL_RETRY_MS = 2 * 60 * 60 * 1000;
+  const DM_LOOKUP_TIMEOUT_MS = 25000;
+  const DM_SCRAPE_TIMEOUT_MS = 20000;
+  const DM_NO_RESULTS_MIN_MS = 4000;
+  const DM_CONCURRENCY = 2;
 
   function normVrid(s) {
     return String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
@@ -365,6 +379,18 @@
 
     // Re-render just the VRID table when the YMS tab pushes new data (no KIPS/FCLM calls).
     GM_addValueChangeListener(YMS_KEY, () => renderResults(lastLoads));
+
+    // Dock Master frames/tabs write VRID -> appointment results here; wake their waiters and re-render.
+    GM_addValueChangeListener(DM_KEY, (name, oldVal, newVal) => {
+      const map = newVal || {};
+      Object.keys(dmWaiters).forEach(v => {
+        if (map[v] && (map[v].seenAt || 0) >= dmWaiters[v].since) {
+          dmSession[v] = map[v];
+          dmWaiters[v](true);
+        }
+      });
+      renderResults(lastLoads);
+    });
   }
 
   // --- Live updates ---
@@ -435,20 +461,21 @@
     }
   }
 
-  // Watch the page (excluding our panel) and re-scan when the data table changes.
+  // Watch the page (excluding our panel and Dock Master frames) and re-scan when the data table changes.
   function startTableObserver() {
     const isOutsidePanel = node => {
       const el = node && (node.nodeType === 1 ? node : node.parentElement);
-      return !!el && !el.closest('.aft-panel');
+      return !!el && !el.closest('.aft-panel, .aft-dm-frame');
     };
+    const isOwnNode = n => n.nodeType === 1 && (n.classList.contains('aft-panel') || n.classList.contains('aft-dm-frame'));
     const observer = new MutationObserver(mutations => {
       if (manualInProgress) return;
       const relevant = mutations.some(m => {
         if (!isOutsidePanel(m.target)) return false;
         if (m.type !== 'childList') return true;
-        // Ignore our own panel being added/removed from <body>.
+        // Ignore our own panel / hidden Dock Master iframes being added/removed from <body>.
         const nodes = [...m.addedNodes, ...m.removedNodes];
-        return nodes.length === 0 || nodes.some(n => !(n.nodeType === 1 && n.classList.contains('aft-panel')));
+        return nodes.length === 0 || nodes.some(n => !isOwnNode(n));
       });
       if (!relevant) return;
       clearTimeout(observerTimer);
@@ -505,9 +532,7 @@
     if (!resultsEl) return;
     const yms = GM_getValue(YMS_KEY, {}) || {};
     const ymsCount = Object.keys(yms).length;
-    const statusHtml = ymsCount > 0
-      ? '<div class="aft-yms-status">Oculus synced ' + formatAgo(GM_getValue(YMS_TS_KEY, 0)) + ' (' + ymsCount + ' VRIDs)</div>'
-      : '<div class="aft-yms-status"><a href="' + YMS_URL + '" target="_blank" rel="noopener noreferrer">Oculus: no data — open Oculus tab</a></div>';
+    const apptMap = dmGetMap();
     const ymsCell = v => '<td class="aft-yms">' + (v ? escapeHtml(v) : '—') + '</td>';
 
     // Exact key match first; fall back to containment (Oculus/AFT cells may carry extra text).
@@ -519,24 +544,195 @@
       return k ? yms[k] : null;
     };
     let matched = 0;
+    let apptMapped = 0;
     const unmatched = [];
 
     let rows = '';
     loads.forEach(l => {
       const timeStr = l.arrivalTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
       const dateStr = l.arrivalTime.toLocaleDateString([], { month: 'short', day: 'numeric' });
-      const hit = lookupYms(normVrid(l.loadId));
-      if (hit) matched++; else unmatched.push(normVrid(l.loadId));
+      const vrid = normVrid(l.loadId);
+      // Oculus "VRID" column holds Dock Master appointment ids; try the mapped appt first.
+      const appt = apptMap[vrid] ? apptMap[vrid].appt : null;
+      if (appt) apptMapped++;
+      const hit = (appt && yms[appt]) || lookupYms(vrid);
+      if (hit) matched++; else unmatched.push(vrid);
       const y = hit || {};
       rows += '<tr><td class="aft-vrid">' + escapeHtml(l.loadId) + '</td><td class="aft-date">' + dateStr + ' ' + timeStr + '</td><td class="aft-qty">' + l.qty.toLocaleString() + '</td>' +
         ymsCell(y.loadConfig) + ymsCell(y.flType) + ymsCell(y.pprSmall) + ymsCell(y.pprMedium) + '</tr>';
     });
 
-    console.log('[AFT/Oculus] matched ' + matched + '/' + loads.length + ' AFT VRIDs against ' + ymsKeys.length + ' Oculus VRIDs. Sample AFT unmatched: ' + unmatched.slice(0, 5).join(', ') + ' | sample Oculus keys: ' + ymsKeys.slice(0, 5).join(', '));
+    const dmStatus = ' · Dock Master: ' + (dmQueueRunning ? 'looking up ' + dmInFlight.size + '… · ' : '') +
+      'matched ' + apptMapped + '/' + loads.length;
+    const statusHtml = ymsCount > 0
+      ? '<div class="aft-yms-status">Oculus synced ' + formatAgo(GM_getValue(YMS_TS_KEY, 0)) + ' (' + ymsCount + ')' + escapeHtml(dmStatus) + '</div>'
+      : '<div class="aft-yms-status"><a href="' + YMS_URL + '" target="_blank" rel="noopener noreferrer">Oculus: no data — open Oculus tab</a>' + escapeHtml(dmStatus) + '</div>';
+
+    console.log('[AFT/Oculus] matched ' + matched + '/' + loads.length + ' AFT VRIDs against ' + ymsKeys.length + ' Oculus VRIDs (appointment-mapped ' + apptMapped + '/' + loads.length + '). Sample AFT unmatched: ' + unmatched.slice(0, 5).join(', ') + ' | sample Oculus keys: ' + ymsKeys.slice(0, 5).join(', '));
 
     resultsEl.innerHTML = statusHtml + (loads.length > 0
       ? '<table><thead><tr><th>VRID</th><th>Received</th><th>Qty</th><th>Load Config</th><th>FL Type</th><th>PPR Small</th><th>PPR Medium</th></tr></thead><tbody>' + rows + '</tbody></table>'
       : '<div style="color:#78909c;padding:8px;text-align:center">No loads found in window</div>');
+  }
+
+  // --- Dock Master lookups (AFT side) ---
+  let dmMode = 'iframe';           // switches to 'tab' for the session if iframes are blocked
+  let dmQueueRunning = false;
+  const dmQueue = [];
+  const dmInFlight = new Set();    // VRIDs queued or being looked up
+  const dmSession = {};            // results seen this session (guards against cross-frame write races)
+  const dmFailedAt = {};           // VRID -> time of last timed-out lookup this session
+  const dmWaiters = {};            // VRID -> resolver, woken by the vridToAppt listener
+  const dmProbe = { done: 0, failed: [] };
+
+  function dmPrune(map, now) {
+    Object.keys(map).forEach(k => {
+      if (!map[k] || !map[k].seenAt || now - map[k].seenAt > DM_MAX_AGE_MS) delete map[k];
+    });
+    return map;
+  }
+
+  // Stored map merged with this session's results (newest wins), minus entries older than 7 days.
+  function dmGetMap() {
+    const map = Object.assign({}, GM_getValue(DM_KEY, {}) || {});
+    Object.keys(dmSession).forEach(k => {
+      const s = dmSession[k];
+      if (!map[k] || (map[k].seenAt || 0) < s.seenAt) map[k] = s;
+    });
+    return dmPrune(map, Date.now());
+  }
+
+  function dmSearchUrl(vrid) {
+    return DM_SEARCH_URL + encodeURIComponent(vrid);
+  }
+
+  function dmNeedsLookup(vrid, map, now) {
+    if (dmInFlight.has(vrid)) return false;
+    const e = map[vrid];
+    if (e && e.appt) return false;
+    if (e && now - e.seenAt < DM_NULL_RETRY_MS) return false;
+    if (dmFailedAt[vrid] && now - dmFailedAt[vrid] < DM_NULL_RETRY_MS) return false;
+    return true;
+  }
+
+  // Resolves true when the listener sees this VRID in vridToAppt, false on timeout.
+  function dmWait(vrid, ms) {
+    return new Promise(resolve => {
+      const timer = setTimeout(() => {
+        delete dmWaiters[vrid];
+        resolve(false);
+      }, ms);
+      const waiter = ok => {
+        clearTimeout(timer);
+        delete dmWaiters[vrid];
+        resolve(ok);
+      };
+      waiter.since = Date.now();   // only results written after this count
+      dmWaiters[vrid] = waiter;
+    });
+  }
+
+  async function dmLookupIframe(vrid) {
+    const wait = dmWait(vrid, DM_LOOKUP_TIMEOUT_MS);
+    const frame = document.createElement('iframe');
+    frame.className = 'aft-dm-frame';
+    frame.setAttribute('aria-hidden', 'true');
+    frame.tabIndex = -1;
+    frame.style.cssText = 'position:fixed;left:-9999px;top:0;width:1px;height:1px;border:0;';
+    frame.src = dmSearchUrl(vrid);
+    document.body.appendChild(frame);
+    const ok = await wait;
+    frame.remove();
+    return ok;
+  }
+
+  async function dmLookupTab(vrid) {
+    const wait = dmWait(vrid, DM_LOOKUP_TIMEOUT_MS);
+    let tab = null;
+    try {
+      tab = GM_openInTab(dmSearchUrl(vrid), { active: false, insert: true, setParent: true });
+    } catch (e) {
+      console.warn('[AFT/DockMaster] GM_openInTab failed:', e);
+    }
+    const ok = await wait;
+    try { if (tab && typeof tab.close === 'function') tab.close(); } catch (e) { /* tab already gone */ }
+    return ok;
+  }
+
+  // Runs one lookup; returns true if the VRID was put back on the queue (iframe -> tab fallback).
+  async function dmLookup(vrid) {
+    const mode = dmMode;
+    const ok = await (mode === 'tab' ? dmLookupTab(vrid) : dmLookupIframe(vrid));
+    if (mode === 'iframe' && dmProbe.done < 2) {
+      dmProbe.done++;
+      if (!ok) dmProbe.failed.push(vrid);
+      if (dmProbe.done === 2 && dmProbe.failed.length === 2 && dmMode === 'iframe') {
+        dmMode = 'tab';
+        console.log('[AFT/DockMaster] first 2 iframe lookups timed out (likely X-Frame-Options/CSP); switching to background tabs for this session.');
+        dmProbe.failed.forEach(f => {
+          if (f === vrid) return;
+          delete dmFailedAt[f];
+          dmInFlight.add(f);
+          dmQueue.push(f);
+        });
+        dmQueue.push(vrid);
+        return true;
+      }
+    }
+    if (!ok) {
+      // Started as an iframe but the session has since switched to tabs: retry as a tab.
+      if (mode === 'iframe' && dmMode === 'tab') {
+        dmQueue.push(vrid);
+        return true;
+      }
+      dmFailedAt[vrid] = Date.now();
+      console.log('[AFT/DockMaster] ' + vrid + ' -> timed out (' + mode + ')');
+    }
+    return false;
+  }
+
+  async function dmRunQueue() {
+    if (dmQueueRunning) return;
+    dmQueueRunning = true;
+    renderResults(lastLoads);
+    const worker = async () => {
+      while (dmQueue.length) {
+        const vrid = dmQueue.shift();
+        let requeued = false;
+        try {
+          requeued = await dmLookup(vrid);
+        } catch (e) {
+          console.warn('[AFT/DockMaster] lookup failed for ' + vrid + ':', e);
+        }
+        if (!requeued) dmInFlight.delete(vrid);
+        renderResults(lastLoads);
+      }
+    };
+    try {
+      while (dmQueue.length) {
+        const workers = [];
+        for (let i = 0; i < DM_CONCURRENCY; i++) workers.push(worker());
+        await Promise.all(workers);
+      }
+    } finally {
+      dmQueueRunning = false;
+      // Persist merged + pruned map (also recovers entries lost to concurrent frame writes).
+      GM_setValue(DM_KEY, dmGetMap());
+      renderResults(lastLoads);
+    }
+  }
+
+  // Queue Dock Master lookups for loads with no cached appointment id.
+  function dmQueueLookups(loads) {
+    const map = dmGetMap();
+    const now = Date.now();
+    loads.forEach(l => {
+      const vrid = normVrid(l.loadId);
+      if (!vrid || !dmNeedsLookup(vrid, map, now)) return;
+      dmInFlight.add(vrid);
+      dmQueue.push(vrid);
+    });
+    if (dmQueue.length) dmRunQueue();
   }
 
   function refresh(opts) {
@@ -553,6 +749,7 @@
 
     lastLoads = loads;
     renderResults(loads);
+    dmQueueLookups(loads);
 
     // Hourly breakdown — left column
     const hourlySection = document.getElementById('aft-hourly-section');
@@ -1197,10 +1394,87 @@
     setInterval(run, 60000);
   }
 
-  // On YMS, only run the scraper; everywhere else, the AFT panel.
-  const startup = location.hostname === YMS_HOST ? initYms : init;
-  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', startup);
-  else startup();
+  // --- Dock Master scraper (runs only on the IDX host, usually inside a hidden AFT iframe) ---
+  function dmVridFromUrl() {
+    const p = new URLSearchParams(location.search);
+    if (String(p.get('ac') || '').toUpperCase() !== 'VRID') return '';
+    return normVrid(p.get('av'));
+  }
+
+  // First digits-only value under an "Appointment Id" header in any table/ARIA grid.
+  function dmFindAppt() {
+    for (const g of ymsReadGrids()) {
+      const col = g.headers.findIndex(h => normHeader(h).replace(/ /g, '').includes('appointmentid'));
+      if (col < 0) continue;
+      for (const r of g.rows) {
+        const digits = String(r[col] || '').replace(/\D/g, '');
+        if (digits) return digits;
+      }
+    }
+    return null;
+  }
+
+  function dmNoResults() {
+    return /\b0\s+appointments?\s+found\b|\bno\s+appointments?\s+found\b/i.test(cellText(document.body));
+  }
+
+  function dmStore(vrid, appt) {
+    const now = Date.now();
+    const map = GM_getValue(DM_KEY, {}) || {};
+    map[vrid] = { appt: appt || null, seenAt: now };
+    GM_setValue(DM_KEY, dmPrune(map, now));
+    console.log('[AFT/DockMaster] ' + vrid + ' -> ' + (appt || 'none'));
+  }
+
+  function initDockMaster() {
+    const vrid = dmVridFromUrl();
+    if (!vrid) return;
+    const startedAt = Date.now();
+    let done = false;
+    let pending = false;
+    let poller = null;
+    let observer = null;
+
+    const finish = appt => {
+      if (done) return;
+      done = true;
+      if (observer) observer.disconnect();
+      clearInterval(poller);
+      dmStore(vrid, appt);
+    };
+    const check = () => {
+      if (done) return;
+      const elapsed = Date.now() - startedAt;
+      try {
+        const appt = dmFindAppt();
+        if (appt) { finish(appt); return; }
+        // Wait a few seconds before trusting "0 found" in case it's a pre-load placeholder.
+        if (elapsed >= DM_NO_RESULTS_MIN_MS && dmNoResults()) { finish(null); return; }
+      } catch (e) {
+        console.warn('[AFT/DockMaster] scrape failed:', e);
+      }
+      if (elapsed >= DM_SCRAPE_TIMEOUT_MS) finish(null);
+    };
+
+    observer = new MutationObserver(() => {
+      if (pending || done) return;
+      pending = true;
+      setTimeout(() => { pending = false; check(); }, 250);
+    });
+    observer.observe(document.body || document.documentElement, { childList: true, subtree: true, characterData: true });
+    poller = setInterval(check, 1000);
+    check();
+  }
+
+  // Three hosts: Dock Master (IDX) scraper, Oculus scraper, or the AFT panel (top window only).
+  let startup = null;
+  if (location.hostname === DM_HOST) startup = initDockMaster;
+  else if (location.hostname === YMS_HOST) startup = initYms;
+  else if (window.top === window.self) startup = init;
+  if (startup) {
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', startup);
+    else startup();
+  }
 })();
 
 
