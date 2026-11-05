@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AFT - Daily Receive Counter (3AM to 3AM)
 // @namespace    http://tampermonkey.net/
-// @version      1.0.4
+// @version      1.0.5
 // @description  Shows VRIDs, dates, and quantities received for the current day (3AM to 3AM). Hides closed trailers.
 // @updateURL    https://raw.githubusercontent.com/nloprete/amazon-ops-tools/main/aft-receive-counter.user.js
 // @downloadURL  https://raw.githubusercontent.com/nloprete/amazon-ops-tools/main/aft-receive-counter.user.js
@@ -32,8 +32,10 @@
       padding: 10px 14px;
       font-family: "Amazon Ember", Arial, sans-serif;
       box-shadow: 0 4px 16px rgba(0,0,0,0.3);
-      width: 1050px;
-      max-height: 80vh;
+      width: calc(100vw - 24px);
+      height: calc(100vh - 72px);
+      max-height: calc(100vh - 72px);
+      box-sizing: border-box;
       border: 2px solid #ff9900;
       display: flex;
       flex-direction: column;
@@ -60,6 +62,7 @@
     }
     .aft-min-btn:hover { color: #fff; }
     .aft-panel.minimized .aft-body { display: none; }
+    .aft-panel.minimized { height: auto; min-height: 0; width: 320px; min-width: 0; resize: none; }
     .aft-body {
       display: flex;
       flex-direction: column;
@@ -503,18 +506,33 @@
     const yms = GM_getValue(YMS_KEY, {}) || {};
     const ymsCount = Object.keys(yms).length;
     const statusHtml = ymsCount > 0
-      ? '<div class="aft-yms-status">YMS synced ' + formatAgo(GM_getValue(YMS_TS_KEY, 0)) + ' (' + ymsCount + ' VRIDs)</div>'
-      : '<div class="aft-yms-status"><a href="' + YMS_URL + '" target="_blank" rel="noopener noreferrer">YMS: no data — open YMS tab</a></div>';
+      ? '<div class="aft-yms-status">Oculus synced ' + formatAgo(GM_getValue(YMS_TS_KEY, 0)) + ' (' + ymsCount + ' VRIDs)</div>'
+      : '<div class="aft-yms-status"><a href="' + YMS_URL + '" target="_blank" rel="noopener noreferrer">Oculus: no data — open Oculus tab</a></div>';
     const ymsCell = v => '<td class="aft-yms">' + (v ? escapeHtml(v) : '—') + '</td>';
+
+    // Exact key match first; fall back to containment (Oculus/AFT cells may carry extra text).
+    const ymsKeys = Object.keys(yms);
+    const lookupYms = id => {
+      if (!id) return null;
+      if (yms[id]) return yms[id];
+      const k = ymsKeys.find(key => key.includes(id) || (key.length >= 8 && id.includes(key)));
+      return k ? yms[k] : null;
+    };
+    let matched = 0;
+    const unmatched = [];
 
     let rows = '';
     loads.forEach(l => {
       const timeStr = l.arrivalTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
       const dateStr = l.arrivalTime.toLocaleDateString([], { month: 'short', day: 'numeric' });
-      const y = yms[normVrid(l.loadId)] || {};
+      const hit = lookupYms(normVrid(l.loadId));
+      if (hit) matched++; else unmatched.push(normVrid(l.loadId));
+      const y = hit || {};
       rows += '<tr><td class="aft-vrid">' + escapeHtml(l.loadId) + '</td><td class="aft-date">' + dateStr + ' ' + timeStr + '</td><td class="aft-qty">' + l.qty.toLocaleString() + '</td>' +
         ymsCell(y.loadConfig) + ymsCell(y.flType) + ymsCell(y.pprSmall) + ymsCell(y.pprMedium) + '</tr>';
     });
+
+    console.log('[AFT/Oculus] matched ' + matched + '/' + loads.length + ' AFT VRIDs against ' + ymsKeys.length + ' Oculus VRIDs. Sample AFT unmatched: ' + unmatched.slice(0, 5).join(', ') + ' | sample Oculus keys: ' + ymsKeys.slice(0, 5).join(', '));
 
     resultsEl.innerHTML = statusHtml + (loads.length > 0
       ? '<table><thead><tr><th>VRID</th><th>Received</th><th>Qty</th><th>Load Config</th><th>FL Type</th><th>PPR Small</th><th>PPR Medium</th></tr></thead><tbody>' + rows + '</tbody></table>'
@@ -1146,7 +1164,7 @@
       if (!map[k] || !map[k].seenAt || now - map[k].seenAt > YMS_MAX_AGE_MS) delete map[k];
     });
 
-    console.log('[AFT/YMS] scraped ' + scraped + ' rows, headers: ' + (headerLogs.join(' | ') || 'no matching grid found'));
+    console.log('[AFT/Oculus] scraped ' + scraped + ' rows, headers: ' + (headerLogs.join(' | ') || 'no matching grid found'));
     if (scraped > 0) {
       GM_setValue(YMS_KEY, map);
       GM_setValue(YMS_TS_KEY, now);
@@ -1156,7 +1174,7 @@
 
   function initYms() {
     const run = () => {
-      try { ymsScrape(); } catch (e) { console.warn('[AFT/YMS] scrape failed:', e); }
+      try { ymsScrape(); } catch (e) { console.warn('[AFT/Oculus] scrape failed:', e); }
     };
     setTimeout(run, 3000);
 
