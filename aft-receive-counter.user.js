@@ -1,15 +1,20 @@
 // ==UserScript==
 // @name         AFT - Daily Receive Counter (3AM to 3AM)
 // @namespace    http://tampermonkey.net/
-// @version      1.0.2
+// @version      1.0.4
 // @description  Shows VRIDs, dates, and quantities received for the current day (3AM to 3AM). Hides closed trailers.
 // @updateURL    https://raw.githubusercontent.com/nloprete/amazon-ops-tools/main/aft-receive-counter.user.js
 // @downloadURL  https://raw.githubusercontent.com/nloprete/amazon-ops-tools/main/aft-receive-counter.user.js
 // @match        https://afttransshipmenthub-na.aka.amazon.com/*/view-transfers/inbound*
+// @match        https://oculus.qubit.amazon.dev/transship/*
 // @connect      maple-syrup.corp.amazon.com
 // @connect      fclm-portal.amazon.com
+// @connect      oculus.qubit.amazon.dev
 // @grant        GM_addStyle
 // @grant        GM_xmlhttpRequest
+// @grant        GM_setValue
+// @grant        GM_getValue
+// @grant        GM_addValueChangeListener
 // ==/UserScript==
 
 (function () {
@@ -142,7 +147,30 @@
       width: 100%;
     }
     .aft-input:focus { outline: none; border-color: #ff9900; }
+    .aft-results th { white-space: nowrap; }
+    .aft-results td.aft-yms { font-size: 10px; white-space: nowrap; color: #e0e0e0; }
+    .aft-yms-status { font-size: 10px; color: #78909c; padding: 2px 0 4px; white-space: nowrap; }
+    .aft-yms-status a { color: #4fc3f7; }
   `);
+
+  // --- YMS data sharing (oculus.qubit.amazon.dev <-> AFT) ---
+  const YMS_KEY = 'ymsData';
+  const YMS_TS_KEY = 'ymsUpdatedAt';
+  const YMS_URL = 'https://oculus.qubit.amazon.dev/transship/RIC4';
+  const YMS_HOST = 'oculus.qubit.amazon.dev';
+  const YMS_MAX_AGE_MS = 48 * 60 * 60 * 1000;
+
+  function normVrid(s) {
+    return String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  }
+
+  function escapeHtml(s) {
+    return String(s == null ? '' : s)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
 
   function getShiftWindow() {
     const startInput = document.getElementById('aft-start');
@@ -193,9 +221,22 @@
     return isNaN(d.getTime()) ? null : d;
   }
 
+  // First <table> on the page that is NOT part of our own panel.
+  function getPageTable() {
+    return [...document.querySelectorAll('table')].find(t => !t.closest('.aft-panel')) || null;
+  }
+
+  // Cheap fingerprint of the page table's rows, used to detect real data changes.
+  function getTableSignature() {
+    const table = getPageTable();
+    if (!table) return '';
+    const body = table.tBodies[0] || table;
+    return body.rows.length + '|' + body.textContent;
+  }
+
   function scanTable() {
     const { start, end } = getShiftWindow();
-    const table = document.querySelector('table');
+    const table = getPageTable();
     if (!table) return { loads: [], totalQty: 0, totalLoads: 0 };
 
     // Find columns by header name
@@ -297,7 +338,7 @@
     }, true);
     window.addEventListener('mouseup', () => { isDragging = false; }, true);
 
-    document.getElementById('aft-refresh').addEventListener('click', refresh);
+    document.getElementById('aft-refresh').addEventListener('click', manualRefresh);
     document.getElementById('aft-start').addEventListener('change', refresh);
     document.getElementById('aft-end').addEventListener('change', refresh);
 
@@ -317,6 +358,104 @@
     });
 
     refresh();
+    startTableObserver();
+
+    // Re-render just the VRID table when the YMS tab pushes new data (no KIPS/FCLM calls).
+    GM_addValueChangeListener(YMS_KEY, () => renderResults(lastLoads));
+  }
+
+  // --- Live updates ---
+  const NETWORK_THROTTLE_MS = 60000;
+  const OBSERVER_DEBOUNCE_MS = 1500;
+  const NATIVE_WAIT_MS = 8000;
+  let lastNetworkAt = 0;
+  let lastTableSig = '';
+  let manualInProgress = false;
+  let observerTimer = null;
+
+  // Find the AFT page's own reload control (outside our panel), preferring "refresh".
+  function findNativeReloadControl() {
+    const candidates = [...document.querySelectorAll('button, [role="button"], input[type="button"], input[type="submit"], a')]
+      .filter(el => !el.closest('.aft-panel'))
+      // Skip real navigation links so we never leave the page.
+      .filter(el => !(el.tagName === 'A' && !el.getAttribute('role') && /^(https?:|\/)/i.test(el.getAttribute('href') || '')))
+      .filter(el => !el.disabled && el.getClientRects().length > 0);
+    const labelOf = el => [el.textContent, el.value, el.getAttribute('aria-label'), el.getAttribute('title')]
+      .filter(Boolean).join(' ').trim();
+    for (const re of [/refresh/i, /reload/i, /search/i, /apply/i]) {
+      const match = candidates.find(el => re.test(labelOf(el)));
+      if (match) return { el: match, label: labelOf(match) };
+    }
+    return null;
+  }
+
+  function waitForTableChange(prevSig, timeoutMs) {
+    return new Promise(resolve => {
+      const startedAt = Date.now();
+      const iv = setInterval(() => {
+        if (getTableSignature() !== prevSig) {
+          clearInterval(iv);
+          // Give the page a moment to finish rendering rows.
+          setTimeout(() => resolve(true), 300);
+        } else if (Date.now() - startedAt >= timeoutMs) {
+          clearInterval(iv);
+          resolve(false);
+        }
+      }, 250);
+    });
+  }
+
+  async function manualRefresh() {
+    if (manualInProgress) return;
+    const btn = document.getElementById('aft-refresh');
+    const originalText = btn ? btn.textContent : '';
+    manualInProgress = true;
+    if (btn) { btn.disabled = true; btn.textContent = '⏳ Refreshing...'; }
+    try {
+      const native = findNativeReloadControl();
+      if (native) {
+        console.log('[AFT Receive Counter] Clicking native reload control:', native.label, native.el);
+        const prevSig = getTableSignature();
+        native.el.click();
+        const changed = await waitForTableChange(prevSig, NATIVE_WAIT_MS);
+        if (!changed) console.log('[AFT Receive Counter] Page table did not change within ' + NATIVE_WAIT_MS + 'ms; using current table.');
+      } else {
+        console.log('[AFT Receive Counter] No native reload control found; re-scanning current table.');
+      }
+    } catch (e) {
+      console.warn('[AFT Receive Counter] Native reload failed:', e);
+    } finally {
+      clearTimeout(observerTimer);
+      refresh();
+      manualInProgress = false;
+      if (btn) { btn.disabled = false; btn.textContent = originalText; }
+    }
+  }
+
+  // Watch the page (excluding our panel) and re-scan when the data table changes.
+  function startTableObserver() {
+    const isOutsidePanel = node => {
+      const el = node && (node.nodeType === 1 ? node : node.parentElement);
+      return !!el && !el.closest('.aft-panel');
+    };
+    const observer = new MutationObserver(mutations => {
+      if (manualInProgress) return;
+      const relevant = mutations.some(m => {
+        if (!isOutsidePanel(m.target)) return false;
+        if (m.type !== 'childList') return true;
+        // Ignore our own panel being added/removed from <body>.
+        const nodes = [...m.addedNodes, ...m.removedNodes];
+        return nodes.length === 0 || nodes.some(n => !(n.nodeType === 1 && n.classList.contains('aft-panel')));
+      });
+      if (!relevant) return;
+      clearTimeout(observerTimer);
+      observerTimer = setTimeout(() => {
+        // Only re-render when the page table's rows actually changed.
+        if (manualInProgress || getTableSignature() === lastTableSig) return;
+        refresh({ fromObserver: true });
+      }, OBSERVER_DEBOUNCE_MS);
+    });
+    observer.observe(document.body, { childList: true, subtree: true, characterData: true });
   }
 
   // --- S1 Goal / Gap ---
@@ -347,7 +486,45 @@
     }
   }
 
-  function refresh() {
+  // --- VRID results table (with YMS columns) ---
+  let lastLoads = [];
+
+  function formatAgo(ts) {
+    if (!ts) return 'unknown';
+    const mins = Math.max(0, Math.floor((Date.now() - ts) / 60000));
+    if (mins < 60) return mins + 'm ago';
+    return Math.floor(mins / 60) + 'h ' + (mins % 60) + 'm ago';
+  }
+
+  // Re-renders only #aft-results; safe to call on YMS data changes (no network calls).
+  function renderResults(loads) {
+    const resultsEl = document.getElementById('aft-results');
+    if (!resultsEl) return;
+    const yms = GM_getValue(YMS_KEY, {}) || {};
+    const ymsCount = Object.keys(yms).length;
+    const statusHtml = ymsCount > 0
+      ? '<div class="aft-yms-status">YMS synced ' + formatAgo(GM_getValue(YMS_TS_KEY, 0)) + ' (' + ymsCount + ' VRIDs)</div>'
+      : '<div class="aft-yms-status"><a href="' + YMS_URL + '" target="_blank" rel="noopener noreferrer">YMS: no data — open YMS tab</a></div>';
+    const ymsCell = v => '<td class="aft-yms">' + (v ? escapeHtml(v) : '—') + '</td>';
+
+    let rows = '';
+    loads.forEach(l => {
+      const timeStr = l.arrivalTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      const dateStr = l.arrivalTime.toLocaleDateString([], { month: 'short', day: 'numeric' });
+      const y = yms[normVrid(l.loadId)] || {};
+      rows += '<tr><td class="aft-vrid">' + escapeHtml(l.loadId) + '</td><td class="aft-date">' + dateStr + ' ' + timeStr + '</td><td class="aft-qty">' + l.qty.toLocaleString() + '</td>' +
+        ymsCell(y.loadConfig) + ymsCell(y.flType) + ymsCell(y.pprSmall) + ymsCell(y.pprMedium) + '</tr>';
+    });
+
+    resultsEl.innerHTML = statusHtml + (loads.length > 0
+      ? '<table><thead><tr><th>VRID</th><th>Received</th><th>Qty</th><th>Load Config</th><th>FL Type</th><th>PPR Small</th><th>PPR Medium</th></tr></thead><tbody>' + rows + '</tbody></table>'
+      : '<div style="color:#78909c;padding:8px;text-align:center">No loads found in window</div>');
+  }
+
+  function refresh(opts) {
+    // Event objects / interval calls count as forced; only the observer passes fromObserver.
+    const fromObserver = !!(opts && opts.fromObserver === true);
+    lastTableSig = getTableSignature();
     const { loads, totalQty, totalLoads } = scanTable();
     const { start, end } = getShiftWindow();
 
@@ -356,16 +533,8 @@
     updateGap();
     document.getElementById('aft-loads').textContent = totalLoads;
 
-    let rows = '';
-    loads.forEach(l => {
-      const timeStr = l.arrivalTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-      const dateStr = l.arrivalTime.toLocaleDateString([], { month: 'short', day: 'numeric' });
-      rows += '<tr><td class="aft-vrid">' + l.loadId + '</td><td class="aft-date">' + dateStr + ' ' + timeStr + '</td><td class="aft-qty">' + l.qty.toLocaleString() + '</td></tr>';
-    });
-
-    document.getElementById('aft-results').innerHTML = loads.length > 0
-      ? '<table><thead><tr><th>VRID</th><th>Received</th><th>Qty</th></tr></thead><tbody>' + rows + '</tbody></table>'
-      : '<div style="color:#78909c;padding:8px;text-align:center">No loads found in window</div>';
+    lastLoads = loads;
+    renderResults(loads);
 
     // Hourly breakdown — left column
     const hourlySection = document.getElementById('aft-hourly-section');
@@ -557,6 +726,10 @@
 
     const fmt = d => d.toLocaleDateString() + ' 3:00 AM';
     document.getElementById('aft-range').textContent = fmt(start) + ' → ' + fmt(end);
+
+    // Network calls are throttled for observer-triggered refreshes only.
+    if (fromObserver && Date.now() - lastNetworkAt < NETWORK_THROTTLE_MS) return;
+    lastNetworkAt = Date.now();
 
     // Fetch KIPS to find missing trailers
     checkMissingTrailers(loads);
@@ -836,8 +1009,180 @@
     }, 2000);
   }
 
-  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
-  else init();
+  // --- YMS scraper (runs only on oculus.qubit.amazon.dev) ---
+  const YMS_VRID_RE = /^1[0-9A-Z]{8}$/;
+
+  // Strip sort arrows / non-letters, collapse whitespace, lowercase.
+  function normHeader(s) {
+    return String(s || '').replace(/[^A-Za-z]+/g, ' ').replace(/\s+/g, ' ').trim().toLowerCase();
+  }
+
+  function cellText(el) {
+    return String((el && el.textContent) || '').replace(/\s+/g, ' ').trim();
+  }
+
+  // Place cells by aria-colindex when every cell has one (virtualized grids), else by position.
+  function orderCells(cells) {
+    if (cells.length && cells.every(c => c.hasAttribute('aria-colindex'))) {
+      const out = [];
+      cells.forEach(c => {
+        const idx = parseInt(c.getAttribute('aria-colindex'), 10) - 1;
+        if (idx >= 0) out[idx] = cellText(c);
+      });
+      return out;
+    }
+    return cells.map(cellText);
+  }
+
+  // Collect candidate grids: real <table>s and ARIA/div grids.
+  function ymsReadGrids() {
+    const grids = [];
+
+    document.querySelectorAll('table').forEach(t => {
+      if (t.closest('.aft-yms-badge')) return;
+      let headerCells = [];
+      if (t.tHead && t.tHead.rows.length) {
+        headerCells = [...t.tHead.rows[t.tHead.rows.length - 1].cells];
+      } else {
+        const firstRow = t.querySelector('tr');
+        if (firstRow) headerCells = [...firstRow.querySelectorAll('th')];
+      }
+      const bodyRows = [...t.querySelectorAll('tbody tr')].filter(r => r.querySelector('td'));
+      if (!headerCells.length || !bodyRows.length) return;
+      grids.push({
+        type: 'table',
+        headers: headerCells.map(cellText),
+        rows: bodyRows.map(r => [...r.querySelectorAll('td')].map(cellText)),
+      });
+    });
+
+    let containers = [...document.querySelectorAll('[role="grid"], [role="treegrid"], [role="table"]')]
+      .filter(c => c.tagName !== 'TABLE');
+    if (!containers.length && document.querySelector('[role="columnheader"]')) containers = [document.body];
+    containers.forEach(c => {
+      const headerCells = [...c.querySelectorAll('[role="columnheader"]')];
+      const rowEls = [...c.querySelectorAll('[role="row"]')]
+        .filter(r => r.querySelector('[role="gridcell"], [role="cell"]'));
+      if (!headerCells.length || !rowEls.length) return;
+      grids.push({
+        type: 'aria',
+        headers: orderCells(headerCells),
+        rows: rowEls.map(r => orderCells([...r.querySelectorAll('[role="gridcell"], [role="cell"], [role="rowheader"]')])),
+      });
+    });
+
+    return grids;
+  }
+
+  // Map header text to column indexes; returns null if this grid isn't the YMS data grid.
+  function ymsMapColumns(headers, rows) {
+    const norm = headers.map(normHeader);
+    const find = re => norm.findIndex(h => re.test(h || ''));
+    const cols = {
+      vrid: -1,
+      loadConfig: find(/load config/),
+      flType: find(/fl type/),
+      pprSmall: find(/ppr small/),
+      pprMedium: find(/ppr med/),
+    };
+    for (const re of [/vrid/, /load id/, /trailer/]) {
+      cols.vrid = find(re);
+      if (cols.vrid >= 0) break;
+    }
+    // Fallback: the column whose cells most often look like VRIDs.
+    if (cols.vrid < 0) {
+      const width = Math.max(headers.length, ...rows.map(r => r.length), 0);
+      let best = 0;
+      for (let i = 0; i < width; i++) {
+        const hits = rows.filter(r => YMS_VRID_RE.test(normVrid(r[i]))).length;
+        if (hits > best) { best = hits; cols.vrid = i; }
+      }
+    }
+    const hasData = cols.loadConfig >= 0 || cols.flType >= 0 || cols.pprSmall >= 0 || cols.pprMedium >= 0;
+    if (cols.vrid < 0 || !hasData) return null;
+    return cols;
+  }
+
+  function ymsUpdateBadge(count) {
+    let badge = document.querySelector('.aft-yms-badge');
+    if (!badge) {
+      badge = document.createElement('div');
+      badge.className = 'aft-yms-badge';
+      badge.style.cssText = 'position:fixed;bottom:4px;left:4px;z-index:99999;background:#232f3e;color:#ff9900;border:1px solid #ff9900;border-radius:3px;padding:1px 5px;font:10px Arial,sans-serif;opacity:0.8;pointer-events:none;';
+      document.body.appendChild(badge);
+    }
+    const text = 'AFT sync: ' + count + ' VRIDs';
+    if (badge.textContent !== text) badge.textContent = text;
+  }
+
+  function ymsScrape() {
+    const now = Date.now();
+    const map = GM_getValue(YMS_KEY, {}) || {};
+    const val = (r, i) => (i >= 0 ? String(r[i] || '').trim() : '');
+    let scraped = 0;
+    const headerLogs = [];
+
+    ymsReadGrids().forEach(g => {
+      const cols = ymsMapColumns(g.headers, g.rows);
+      if (!cols) return;
+      headerLogs.push(g.type + ' {' + Object.keys(cols).map(k =>
+        k + '=' + (cols[k] >= 0 ? '"' + (g.headers[cols[k]] || '(by cell pattern)') + '"#' + cols[k] : 'none')).join(', ') + '}');
+      g.rows.forEach(r => {
+        const id = normVrid(r[cols.vrid]);
+        if (!id) return;
+        map[id] = {
+          loadConfig: val(r, cols.loadConfig),
+          flType: val(r, cols.flType),
+          pprSmall: val(r, cols.pprSmall),
+          pprMedium: val(r, cols.pprMedium),
+          seenAt: now,
+        };
+        scraped++;
+      });
+    });
+
+    // Prune entries older than 48h.
+    Object.keys(map).forEach(k => {
+      if (!map[k] || !map[k].seenAt || now - map[k].seenAt > YMS_MAX_AGE_MS) delete map[k];
+    });
+
+    console.log('[AFT/YMS] scraped ' + scraped + ' rows, headers: ' + (headerLogs.join(' | ') || 'no matching grid found'));
+    if (scraped > 0) {
+      GM_setValue(YMS_KEY, map);
+      GM_setValue(YMS_TS_KEY, now);
+    }
+    ymsUpdateBadge(Object.keys(map).length);
+  }
+
+  function initYms() {
+    const run = () => {
+      try { ymsScrape(); } catch (e) { console.warn('[AFT/YMS] scrape failed:', e); }
+    };
+    setTimeout(run, 3000);
+
+    let ymsTimer = null;
+    const isBadge = n => n && n.nodeType === 1 && n.classList.contains('aft-yms-badge');
+    const observer = new MutationObserver(mutations => {
+      const relevant = mutations.some(m => {
+        const el = m.target && (m.target.nodeType === 1 ? m.target : m.target.parentElement);
+        if (el && el.closest('.aft-yms-badge')) return false;
+        if (m.type !== 'childList') return true;
+        const nodes = [...m.addedNodes, ...m.removedNodes];
+        return nodes.length === 0 || nodes.some(n => !isBadge(n));
+      });
+      if (!relevant) return;
+      clearTimeout(ymsTimer);
+      ymsTimer = setTimeout(run, 1500);
+    });
+    observer.observe(document.body, { childList: true, subtree: true, characterData: true });
+
+    setInterval(run, 60000);
+  }
+
+  // On YMS, only run the scraper; everywhere else, the AFT panel.
+  const startup = location.hostname === YMS_HOST ? initYms : init;
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', startup);
+  else startup();
 })();
 
 
