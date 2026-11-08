@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AFT - Daily Receive Counter (3AM to 3AM)
 // @namespace    http://tampermonkey.net/
-// @version      1.0.7
+// @version      1.0.8
 // @description  Shows VRIDs, dates, and quantities received for the current day (3AM to 3AM). Hides closed trailers.
 // @updateURL    https://raw.githubusercontent.com/nloprete/amazon-ops-tools/main/aft-receive-counter.user.js
 // @downloadURL  https://raw.githubusercontent.com/nloprete/amazon-ops-tools/main/aft-receive-counter.user.js
@@ -179,6 +179,12 @@
   const DM_SCRAPE_TIMEOUT_MS = 20000;
   const DM_NO_RESULTS_MIN_MS = 4000;
   const DM_CONCURRENCY = 2;
+
+  // --- Oculus auto-sync (AFT loads Oculus in a hidden iframe / background tab) ---
+  const OC_SYNC_INTERVAL_MS = 5 * 60 * 1000;
+  const OC_STALE_MS = 4 * 60 * 1000;
+  const OC_MANUAL_STALE_MS = 60 * 1000;
+  const OC_SYNC_TIMEOUT_MS = 45000;
 
   function normVrid(s) {
     return String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
@@ -394,6 +400,8 @@
       });
       renderResults(lastLoads);
     });
+
+    ocInit();
   }
 
   // --- Live updates ---
@@ -442,6 +450,8 @@
     const btn = document.getElementById('aft-refresh');
     const originalText = btn ? btn.textContent : '';
     manualInProgress = true;
+    // Also pull fresh Oculus data if the last sync is older than a minute (runs in parallel).
+    ocSync(OC_MANUAL_STALE_MS);
     if (btn) { btn.disabled = true; btn.textContent = '⏳ Refreshing...'; }
     try {
       const native = findNativeReloadControl();
@@ -464,19 +474,19 @@
     }
   }
 
-  // Watch the page (excluding our panel and Dock Master frames) and re-scan when the data table changes.
+  // Watch the page (excluding our panel and Dock Master / Oculus frames) and re-scan when the data table changes.
   function startTableObserver() {
     const isOutsidePanel = node => {
       const el = node && (node.nodeType === 1 ? node : node.parentElement);
-      return !!el && !el.closest('.aft-panel, .aft-dm-frame');
+      return !!el && !el.closest('.aft-panel, .aft-dm-frame, .aft-oc-frame');
     };
-    const isOwnNode = n => n.nodeType === 1 && (n.classList.contains('aft-panel') || n.classList.contains('aft-dm-frame'));
+    const isOwnNode = n => n.nodeType === 1 && (n.classList.contains('aft-panel') || n.classList.contains('aft-dm-frame') || n.classList.contains('aft-oc-frame'));
     const observer = new MutationObserver(mutations => {
       if (manualInProgress) return;
       const relevant = mutations.some(m => {
         if (!isOutsidePanel(m.target)) return false;
         if (m.type !== 'childList') return true;
-        // Ignore our own panel / hidden Dock Master iframes being added/removed from <body>.
+        // Ignore our own panel / hidden Dock Master and Oculus iframes being added/removed from <body>.
         const nodes = [...m.addedNodes, ...m.removedNodes];
         return nodes.length === 0 || nodes.some(n => !isOwnNode(n));
       });
@@ -568,14 +578,104 @@
     const dmStatus = ' · Dock Master: ' + (dmQueueRunning ? 'looking up ' + dmInFlight.size + '… · ' : '') +
       'matched ' + apptMapped + '/' + loads.length;
     const statusHtml = ymsCount > 0
-      ? '<div class="aft-yms-status">Oculus synced ' + formatAgo(GM_getValue(YMS_TS_KEY, 0)) + ' (' + ymsCount + ')' + escapeHtml(dmStatus) + '</div>'
-      : '<div class="aft-yms-status"><a href="' + YMS_URL + '" target="_blank" rel="noopener noreferrer">Oculus: no data — open Oculus tab</a>' + escapeHtml(dmStatus) + '</div>';
+      ? '<div class="aft-yms-status">Oculus synced ' + formatAgo(GM_getValue(YMS_TS_KEY, 0)) + ' (' + ymsCount + ')' + (ocSyncing ? ' · syncing…' : '') + escapeHtml(dmStatus) + '</div>'
+      : '<div class="aft-yms-status"><a href="' + YMS_URL + '" target="_blank" rel="noopener noreferrer">' + (ocSyncing ? 'Oculus: syncing…' : 'Oculus: no data — open Oculus tab') + '</a>' + escapeHtml(dmStatus) + '</div>';
 
     console.log('[AFT/Oculus] matched ' + matched + '/' + loads.length + ' AFT VRIDs against ' + ymsKeys.length + ' Oculus VRIDs (appointment-mapped ' + apptMapped + '/' + loads.length + '). Sample AFT unmatched: ' + unmatched.slice(0, 5).join(', ') + ' | sample Oculus keys: ' + ymsKeys.slice(0, 5).join(', '));
 
     resultsEl.innerHTML = statusHtml + (loads.length > 0
-      ? '<table><thead><tr><th>VRID</th><th>Received</th><th>Qty</th><th>Load Config</th><th>FL Type</th><th>PPR Small</th><th>PPR Medium</th></tr></thead><tbody>' + rows + '</tbody></table>'
+      ? '<table><thead><tr><th>VRID</th><th>Received</th><th>Qty</th><th>Load Config</th><th>Cut Time</th><th>PPR Small</th><th>PPR Medium</th></tr></thead><tbody>' + rows + '</tbody></table>'
       : '<div style="color:#78909c;padding:8px;text-align:center">No loads found in window</div>');
+  }
+
+  // --- Oculus auto-sync (AFT side) ---
+  // The Oculus scraper (initYms) runs inside the frame/tab and bumps ymsUpdatedAt when it stores rows.
+  let ocMode = 'iframe';           // switches to 'tab' for the session if iframes are blocked
+  let ocSyncing = false;           // only one sync at a time
+  let ocIframeTimeouts = 0;        // consecutive iframe syncs with no ymsUpdatedAt change
+  let ocWaiter = null;             // resolver, woken by the ymsUpdatedAt listener
+
+  // Resolves true when ymsUpdatedAt moves past its current value, false on timeout.
+  function ocWait(ms) {
+    return new Promise(resolve => {
+      const since = GM_getValue(YMS_TS_KEY, 0) || 0;
+      const timer = setTimeout(() => {
+        ocWaiter = null;
+        resolve(false);
+      }, ms);
+      ocWaiter = ts => {
+        if (!(ts > since)) return;
+        clearTimeout(timer);
+        ocWaiter = null;
+        resolve(true);
+      };
+    });
+  }
+
+  async function ocSyncIframe() {
+    const wait = ocWait(OC_SYNC_TIMEOUT_MS);
+    const frame = document.createElement('iframe');
+    frame.className = 'aft-oc-frame';
+    frame.setAttribute('aria-hidden', 'true');
+    frame.tabIndex = -1;
+    // Full-size (but invisible, off-screen) so a virtualized/paginated grid renders its rows.
+    frame.style.cssText = 'position:fixed;left:-10000px;top:0;width:1600px;height:1200px;opacity:0;pointer-events:none;border:0;';
+    frame.src = YMS_URL;
+    document.body.appendChild(frame);
+    const ok = await wait;
+    frame.remove();
+    return ok;
+  }
+
+  async function ocSyncTab() {
+    const wait = ocWait(OC_SYNC_TIMEOUT_MS);
+    let tab = null;
+    try {
+      tab = GM_openInTab(YMS_URL, { active: false, insert: true, setParent: true });
+    } catch (e) {
+      console.warn('[AFT/Oculus] GM_openInTab failed:', e);
+    }
+    const ok = await wait;
+    try { if (tab && typeof tab.close === 'function') tab.close(); } catch (e) { /* tab already gone */ }
+    return ok;
+  }
+
+  // Loads Oculus in the background if the last sync is older than maxAgeMs.
+  async function ocSync(maxAgeMs) {
+    if (ocSyncing) return;
+    if (Date.now() - (GM_getValue(YMS_TS_KEY, 0) || 0) <= maxAgeMs) return;
+    ocSyncing = true;
+    renderResults(lastLoads);
+    const mode = ocMode;
+    let ok = false;
+    let switched = false;
+    try {
+      ok = await (mode === 'tab' ? ocSyncTab() : ocSyncIframe());
+    } catch (e) {
+      console.warn('[AFT/Oculus] auto-sync failed:', e);
+    } finally {
+      console.log('[AFT/Oculus] auto-sync via ' + mode + ': ' + (ok ? 'ok' : 'timeout'));
+      if (mode === 'iframe') {
+        ocIframeTimeouts = ok ? 0 : ocIframeTimeouts + 1;
+        if (ocIframeTimeouts >= 2 && ocMode === 'iframe') {
+          ocMode = 'tab';
+          switched = true;
+          console.log('[AFT/Oculus] 2 iframe syncs timed out (likely X-Frame-Options/CSP); switching to background tabs for this session.');
+        }
+      }
+      ocSyncing = false;
+      renderResults(lastLoads);
+    }
+    // Retry right away as a tab instead of waiting for the next 5-minute tick.
+    if (switched) ocSync(maxAgeMs);
+  }
+
+  function ocInit() {
+    GM_addValueChangeListener(YMS_TS_KEY, (name, oldVal, newVal) => {
+      if (ocWaiter) ocWaiter(newVal);
+    });
+    ocSync(OC_STALE_MS);
+    setInterval(() => ocSync(OC_STALE_MS), OC_SYNC_INTERVAL_MS);
   }
 
   // --- Dock Master lookups (AFT side) ---
