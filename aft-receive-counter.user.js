@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AFT - Daily Receive Counter (3AM to 3AM)
 // @namespace    http://tampermonkey.net/
-// @version      1.0.9
+// @version      1.0.13
 // @description  Shows VRIDs, dates, and quantities received for the current day (3AM to 3AM). Hides closed trailers.
 // @updateURL    https://raw.githubusercontent.com/nloprete/amazon-ops-tools/main/aft-receive-counter.user.js
 // @downloadURL  https://raw.githubusercontent.com/nloprete/amazon-ops-tools/main/aft-receive-counter.user.js
@@ -159,6 +159,14 @@
     .aft-date { font-size: 11px !important; }
     .aft-yms-status { font-size: 10px; color: #78909c; padding: 2px 0 4px; white-space: nowrap; }
     .aft-yms-status a { color: #4fc3f7; }
+    .aft-next-cuts-title { color: #ff9900; font-weight: 700; font-size: 13px; margin: 16px 0 8px; border-bottom: 2px solid #ff9900; padding-bottom: 6px; }
+    .aft-next-cuts table { width: 100%; border-collapse: collapse; }
+    .aft-next-cuts th { background: #3a4553; color: #ff9900; padding: 6px 10px; text-align: left; font-size: 11px; white-space: nowrap; }
+    .aft-next-cuts td { padding: 6px 10px; border-bottom: 1px solid #3a4553; font-size: 12px; white-space: nowrap; color: #e0e0e0; }
+    .aft-next-cuts tbody tr:nth-child(even) td { background: #26333f; }
+    .aft-next-cuts .aft-nc-rel { font-size: 10px; margin-left: 6px; }
+    .aft-next-cuts .aft-nc-empty { color: #78909c; padding: 8px; text-align: center; }
+    .aft-next-cuts tr.aft-nc-group td { background: #3a4553 !important; font-weight: 700; border-top: 1px solid #ff9900; }
   `);
 
   // --- YMS data sharing (oculus.qubit.amazon.dev <-> AFT) ---
@@ -167,6 +175,10 @@
   const YMS_URL = 'https://oculus.qubit.amazon.dev/transship/RIC4';
   const YMS_HOST = 'oculus.qubit.amazon.dev';
   const YMS_MAX_AGE_MS = 48 * 60 * 60 * 1000;
+  // Rows from the most recent Oculus scrape only (ymsData keeps stale rows for 48h).
+  const OC_LATEST_KEY = 'ocLatest';
+  const NEXT_CUTS_GRACE_MS = 15 * 60 * 1000;
+  const NEXT_CUTS_COUNT = 5;
 
   // --- Dock Master (IDX) VRID -> Appointment Id bridge ---
   // Oculus keys rows by Dock Master appointment id, AFT by VRID; IDX maps one to the other.
@@ -338,7 +350,7 @@
     const defaults = getDefaultTimes();
     const panel = document.createElement('div');
     panel.className = 'aft-panel';
-    panel.innerHTML = '<div class="aft-title">📦 Daily Receive<button class="aft-min-btn">▲</button></div><div class="aft-body"><div class="aft-inputs"><label>From:</label><input type="datetime-local" class="aft-input" id="aft-start" value="' + defaults.startStr + '"><label>To:</label><input type="datetime-local" class="aft-input" id="aft-end" value="' + defaults.endStr + '"></div><div class="aft-summary"><div class="aft-goal-group"><div class="aft-stat"><div class="val" id="aft-total">...</div><div class="lbl">TOTAL QTY</div></div><div class="aft-stat"><input type="text" inputmode="numeric" class="aft-goal-input" id="aft-goal" placeholder="—" aria-label="S1 Goal"><div class="lbl">S1 GOAL</div></div><div class="aft-stat"><div class="val" id="aft-gap" style="color:#78909c">—</div><div class="lbl">GAP</div></div><div class="aft-stat"><div class="val" id="aft-pct" style="color:#78909c">—</div><div class="lbl">COMPLETE</div></div></div><div class="aft-stat"><div class="val" id="aft-loads" style="color:#4fc3f7">...</div><div class="lbl">LOADS</div></div><div class="aft-stat"><div class="val" id="aft-missing-count" style="color:#ff5252">...</div><div class="lbl">MISSING</div></div><div class="aft-stat"><div class="val" id="aft-stow-total" style="color:#b388ff">...</div><div class="lbl">STOW VOL</div></div></div><div style="display:flex;gap:24px;flex:1;min-height:0;overflow:hidden;"><div id="aft-hourly-section" style="flex:1;overflow-y:auto;min-width:0;"></div><div id="aft-stow-section" style="flex:1;overflow-y:auto;min-width:0;"></div><div id="aft-period-section" style="flex:0.7;overflow-y:auto;min-width:0;"></div><div id="aft-results" style="flex:2.2;overflow-y:auto;min-width:0;"></div><div id="aft-missing-section" style="flex:1;overflow-y:auto;min-width:0;"></div></div><button class="aft-refresh" id="aft-refresh">↻ Refresh</button><div class="aft-time-range" id="aft-range"></div></div>';
+    panel.innerHTML = '<div class="aft-title">📦 Daily Receive<button class="aft-min-btn">▲</button></div><div class="aft-body"><div class="aft-inputs"><label>From:</label><input type="datetime-local" class="aft-input" id="aft-start" value="' + defaults.startStr + '"><label>To:</label><input type="datetime-local" class="aft-input" id="aft-end" value="' + defaults.endStr + '"></div><div class="aft-summary"><div class="aft-goal-group"><div class="aft-stat"><div class="val" id="aft-total">...</div><div class="lbl">TOTAL QTY</div></div><div class="aft-stat"><input type="text" inputmode="numeric" class="aft-goal-input" id="aft-goal" placeholder="—" aria-label="S1 Goal"><div class="lbl">S1 GOAL</div></div><div class="aft-stat"><div class="val" id="aft-gap" style="color:#78909c">—</div><div class="lbl">GAP</div></div><div class="aft-stat"><div class="val" id="aft-pct" style="color:#78909c">—</div><div class="lbl">COMPLETE</div></div><div class="aft-stat"><div class="val" id="aft-stow-total" style="color:#b388ff">...</div><div class="lbl">STOW VOL</div></div></div><div class="aft-stat"><div class="val" id="aft-loads" style="color:#4fc3f7">...</div><div class="lbl">LOADS</div></div><div class="aft-stat"><div class="val" id="aft-missing-count" style="color:#ff5252">...</div><div class="lbl">MISSING</div></div></div><div style="display:flex;gap:24px;flex:1;min-height:0;overflow:hidden;"><div id="aft-hourly-section" style="flex:1;overflow-y:auto;min-width:0;"></div><div id="aft-stow-section" style="flex:1;overflow-y:auto;min-width:0;"></div><div id="aft-period-section" style="flex:0.7;overflow-y:auto;min-width:0;"></div><div id="aft-results" style="flex:2.2;overflow-y:auto;min-width:0;"></div><div style="flex:1;overflow-y:auto;min-width:0;"><div id="aft-missing-section"></div><div id="aft-next-cuts" class="aft-next-cuts"></div></div></div><button class="aft-refresh" id="aft-refresh">↻ Refresh</button><div class="aft-time-range" id="aft-range"></div></div>';
     document.body.appendChild(panel);
 
     panel.querySelector('.aft-min-btn').addEventListener('click', () => {
@@ -387,7 +399,10 @@
     startTableObserver();
 
     // Re-render just the VRID table when the YMS tab pushes new data (no KIPS/FCLM calls).
-    GM_addValueChangeListener(YMS_KEY, () => renderResults(lastLoads));
+    GM_addValueChangeListener(YMS_KEY, () => { renderResults(lastLoads); renderNextCuts(); });
+    GM_addValueChangeListener(OC_LATEST_KEY, () => renderNextCuts());
+    // Keep the relative "in 2h 15m" times current.
+    setInterval(renderNextCuts, 60000);
 
     // Dock Master frames/tabs write VRID -> appointment results here; wake their waiters and re-render.
     GM_addValueChangeListener(DM_KEY, (name, oldVal, newVal) => {
@@ -399,6 +414,7 @@
         }
       });
       renderResults(lastLoads);
+      renderNextCuts();
     });
 
     ocInit();
@@ -580,7 +596,7 @@
       if (hit) matched++; else unmatched.push(vrid);
       const y = hit || {};
       rows += '<tr><td class="aft-vrid">' + escapeHtml(l.loadId) + '</td><td class="aft-date">' + dateStr + ' ' + timeStr + '</td><td class="aft-qty">' + l.qty.toLocaleString() + '</td>' +
-        ymsCell(y.loadConfig) + ymsCell(y.flType) + ymsCell(y.pprSmall) + ymsCell(y.pprMedium) + '</tr>';
+        ymsCell(y.loadConfig) + ymsCell(y.flType) + ymsCell(y.pprSmall) + '</tr>';
     });
 
     const dmStatus = ' · Dock Master: ' + (dmQueueRunning ? 'looking up ' + dmInFlight.size + '… · ' : '') +
@@ -592,8 +608,92 @@
     console.log('[AFT/Oculus] matched ' + matched + '/' + loads.length + ' AFT VRIDs against ' + ymsKeys.length + ' Oculus VRIDs (appointment-mapped ' + apptMapped + '/' + loads.length + '). Sample AFT unmatched: ' + unmatched.slice(0, 5).join(', ') + ' | sample Oculus keys: ' + ymsKeys.slice(0, 5).join(', '));
 
     resultsEl.innerHTML = statusHtml + (loads.length > 0
-      ? '<table><thead><tr><th>VRID</th><th>Received</th><th>Qty</th><th>Load Config</th><th>Cut Time</th><th>PPR Small</th><th>PPR Medium</th></tr></thead><tbody>' + rows + '</tbody></table>'
+      ? '<table><thead><tr><th>VRID</th><th>Received</th><th>Qty</th><th>Load Config</th><th>Cut Time</th><th>PPR Small</th></tr></thead><tbody>' + rows + '</tbody></table>'
       : '<div style="color:#78909c;padding:8px;text-align:center">No loads found in window</div>');
+  }
+
+  // "in 2h 15m" / "5m ago" relative to now.
+  function formatRelCut(diffMs) {
+    const mins = Math.round(Math.abs(diffMs) / 60000);
+    const txt = mins < 60 ? mins + 'm' : Math.floor(mins / 60) + 'h ' + (mins % 60) + 'm';
+    return diffMs >= 0 ? 'in ' + txt : txt + ' ago';
+  }
+
+  // Re-renders only #aft-next-cuts from ocLatest; no network calls.
+  function renderNextCuts() {
+    const el = document.getElementById('aft-next-cuts');
+    if (!el) return;
+    let html = '<div class="aft-next-cuts-title">⏱️ Next Cuts</div>';
+    const latest = GM_getValue(OC_LATEST_KEY, []) || [];
+    if (!Array.isArray(latest) || latest.length === 0) {
+      el.innerHTML = html + '<div class="aft-nc-empty">No Oculus data yet — syncing…</div>';
+      return;
+    }
+
+    const now = Date.now();
+    // Only trailers with status "Arrived" (never "Checked In"). Past CUTs stay visible as overdue.
+    const isArrived = s => /arriv/i.test(s || '') && !/check(ed)?\s*-?\s*in/i.test(s || '');
+    const arrived = latest
+      .filter(r => r && typeof r.cutTs === 'number' && isArrived(r.status))
+      .sort((a, b) => a.cutTs - b.cutTs);
+    if (arrived.length === 0) {
+      const anyStatus = latest.some(r => r && r.status);
+      el.innerHTML = html + '<div class="aft-nc-empty">' + (anyStatus ? 'No arrived trailers' : 'No status column found on Oculus') + '</div>';
+      console.log('[AFT/Oculus] Next Cuts: 0 arrived. Statuses seen: ' + [...new Set(latest.map(r => r && r.status).filter(Boolean))].join(', '));
+      return;
+    }
+
+    // Group by CUT time (to the minute), keep the next NEXT_CUTS_COUNT groups.
+    const groups = [];
+    arrived.forEach(r => {
+      const key = Math.floor(r.cutTs / 60000);
+      let g = groups[groups.length - 1];
+      if (!g || g.key !== key) { g = { key, cutTs: r.cutTs, rows: [] }; groups.push(g); }
+      g.rows.push(r);
+    });
+    const upcoming = groups.slice(0, NEXT_CUTS_COUNT);
+
+    // Reverse Dock Master map: appointment id -> VRID.
+    const apptToVrid = {};
+    const apptMap = dmGetMap();
+    Object.keys(apptMap).forEach(v => {
+      const e = apptMap[v];
+      if (e && e.appt) apptToVrid[normVrid(e.appt)] = v;
+    });
+
+    const unitsOf = r => parseInt(String(r.units || '').replace(/[^\d]/g, ''), 10);
+
+    let rows = '';
+    upcoming.forEach(g => {
+      const d = new Date(g.cutTs);
+      const cutStr = d.toLocaleDateString([], { month: 'short', day: 'numeric' }) + ' ' + pad2(d.getHours()) + ':' + pad2(d.getMinutes());
+      const diff = g.cutTs - now;
+      const color = diff < 60 * 60 * 1000 ? '#ff5252' : diff < 3 * 60 * 60 * 1000 ? '#ffd740' : '#e0e0e0';
+      const rel = diff < 0 ? 'overdue ' + formatRelCut(diff).replace(/\s*ago$/, '') : formatRelCut(diff);
+      const groupUnits = g.rows.reduce((s, r) => s + (unitsOf(r) || 0), 0);
+
+      // Group header row: CUT, relative time, trailer count, total units.
+      rows += '<tr class="aft-nc-group"><td colspan="3" style="color:' + color + ';">⏱ ' + escapeHtml(cutStr) +
+        '<span class="aft-nc-rel">' + escapeHtml(rel) + '</span>' +
+        '<span class="aft-nc-rel" style="color:#78909c;">· ' + g.rows.length + ' trailer' + (g.rows.length === 1 ? '' : 's') + '</span></td>' +
+        '<td class="aft-qty">' + groupUnits.toLocaleString() + '</td></tr>';
+
+      g.rows.forEach(r => {
+        const vrid = r.realVrid || apptToVrid[normVrid(r.appt)];
+        const vridHtml = vrid
+          ? '<span class="aft-vrid">' + escapeHtml(vrid) + '</span>'
+          : '<span style="color:#78909c;font-style:italic;" title="Appointment ID (no VRID on Oculus)">' + escapeHtml(r.appt) + '</span>';
+        const u = unitsOf(r);
+        const unitsStr = isNaN(u) ? (r.units ? escapeHtml(r.units) : '—') : u.toLocaleString();
+        rows += '<tr><td style="padding-left:20px;">' + vridHtml + '</td>' +
+          '<td style="color:' + color + ';">' + pad2(d.getHours()) + ':' + pad2(d.getMinutes()) + '</td>' +
+          '<td>' + (r.flType ? escapeHtml(r.flType) : '—') + '</td>' +
+          '<td class="aft-qty">' + unitsStr + '</td></tr>';
+      });
+    });
+
+    el.innerHTML = html + '<div class="aft-nc-empty" style="text-align:left;padding:0 0 4px;">Arrived trailers only · ' + arrived.length + ' total</div>' +
+      '<table><thead><tr><th>VRID</th><th>CUT</th><th>FL Type</th><th>Units</th></tr></thead><tbody>' + rows + '</tbody></table>';
   }
 
   // --- Oculus auto-sync (AFT side) ---
@@ -681,6 +781,7 @@
   function ocInit() {
     GM_addValueChangeListener(YMS_TS_KEY, (name, oldVal, newVal) => {
       if (ocWaiter) ocWaiter(newVal);
+      renderNextCuts();
     });
     ocSync(OC_STALE_MS);
     setInterval(() => ocSync(OC_STALE_MS), OC_SYNC_INTERVAL_MS);
@@ -860,6 +961,7 @@
 
     lastLoads = loads;
     renderResults(loads);
+    renderNextCuts();
     dmQueueLookups(loads);
 
     // Hourly breakdown — left column
@@ -1338,6 +1440,23 @@
   // --- YMS scraper (runs only on oculus.qubit.amazon.dev) ---
   const YMS_VRID_RE = /^1[0-9A-Z]{8}$/;
 
+  // AFT-style VRID (e.g. 1162RLWGG): 9 chars starting with 1, at least one letter.
+  function isAftVrid(s) {
+    return YMS_VRID_RE.test(s) && /[A-Z]/.test(s);
+  }
+
+  // Parse Oculus 'YYYY/MM/DD HH:MM:SS' as local time; returns ms or null.
+  function parseCutTs(str) {
+    const s = String(str || '').trim();
+    const m = s.match(/^(\d{4})[\/-](\d{1,2})[\/-](\d{1,2})[ T](\d{1,2}):(\d{2})(?::(\d{2}))?/);
+    if (m) {
+      const d = new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +(m[6] || 0));
+      return isNaN(d.getTime()) ? null : d.getTime();
+    }
+    const t = s ? Date.parse(s) : NaN;
+    return isNaN(t) ? null : t;
+  }
+
   // Strip sort arrows / non-letters, collapse whitespace, lowercase.
   function normHeader(s) {
     return String(s || '').replace(/[^A-Za-z]+/g, ' ').replace(/\s+/g, ' ').trim().toLowerCase();
@@ -1360,6 +1479,35 @@
     return cells.map(cellText);
   }
 
+  // Cell texts with colspan expanded, so header and body indexes line up.
+  function spanCells(cells) {
+    const out = [];
+    cells.forEach(c => {
+      out.push(cellText(c));
+      const span = Math.min(parseInt(c.getAttribute('colspan'), 10) || 1, 50);
+      for (let i = 1; i < span; i++) out.push('');
+    });
+    return out;
+  }
+
+  // If body rows consistently carry one extra cell (leading checkbox / expand toggle), shift headers right by one.
+  function ymsAlignGrid(grid) {
+    const counts = {};
+    grid.rows.forEach(r => { counts[r.length] = (counts[r.length] || 0) + 1; });
+    let bodyWidth = 0, best = 0;
+    Object.keys(counts).forEach(k => {
+      if (counts[k] > best) { best = counts[k]; bodyWidth = Number(k); }
+    });
+    grid.headerCount = grid.headers.length;
+    grid.bodyWidth = bodyWidth;
+    grid.offset = 0;
+    if (bodyWidth === grid.headers.length + 1) {
+      grid.headers = [''].concat(grid.headers);
+      grid.offset = 1;
+    }
+    return grid;
+  }
+
   // Collect candidate grids: real <table>s and ARIA/div grids.
   function ymsReadGrids() {
     const grids = [];
@@ -1375,11 +1523,12 @@
       }
       const bodyRows = [...t.querySelectorAll('tbody tr')].filter(r => r.querySelector('td'));
       if (!headerCells.length || !bodyRows.length) return;
-      grids.push({
+      grids.push(ymsAlignGrid({
         type: 'table',
-        headers: headerCells.map(cellText),
-        rows: bodyRows.map(r => [...r.querySelectorAll('td')].map(cellText)),
-      });
+        headers: spanCells(headerCells),
+        // r.cells includes any <th> row-header cells, keeping positions aligned with the header row.
+        rows: bodyRows.map(r => spanCells([...r.cells])),
+      }));
     });
 
     let containers = [...document.querySelectorAll('[role="grid"], [role="treegrid"], [role="table"]')]
@@ -1390,11 +1539,11 @@
       const rowEls = [...c.querySelectorAll('[role="row"]')]
         .filter(r => r.querySelector('[role="gridcell"], [role="cell"]'));
       if (!headerCells.length || !rowEls.length) return;
-      grids.push({
+      grids.push(ymsAlignGrid({
         type: 'aria',
         headers: orderCells(headerCells),
         rows: rowEls.map(r => orderCells([...r.querySelectorAll('[role="gridcell"], [role="cell"], [role="rowheader"]')])),
-      });
+      }));
     });
 
     return grids;
@@ -1404,25 +1553,41 @@
   function ymsMapColumns(headers, rows) {
     const norm = headers.map(normHeader);
     const find = re => norm.findIndex(h => re.test(h || ''));
+    // Prefer a header that is exactly the label (e.g. "ppr small"), so similar headers can't win.
+    const findExact = (label, re) => { const i = norm.indexOf(label); return i >= 0 ? i : find(re); };
+    const pprHeaders = norm.map((h, i) => [i, headers[i]]).filter(([i]) => /ppr/.test(norm[i] || ''));
+    if (pprHeaders.length) console.log('[AFT/Oculus] PPR headers:', JSON.stringify(pprHeaders));
     const cols = {
       vrid: -1,
       loadConfig: find(/load config/),
       flType: find(/fl type/),
-      pprSmall: find(/ppr small/),
+      pprSmall: findExact('ppr small', /ppr small/),
       pprMedium: find(/ppr med/),
+      cut: find(/critical unload|\bcut\b/),
+      units: find(/total units/),
+      status: find(/\bstatus\b/),
+      realVrid: -1,
     };
+    if (cols.units < 0) cols.units = find(/\bunits\b/);
     for (const re of [/vrid/, /load id/, /trailer/]) {
       cols.vrid = find(re);
       if (cols.vrid >= 0) break;
     }
+    const width = Math.max(headers.length, ...rows.map(r => r.length), 0);
     // Fallback: the column whose cells most often look like VRIDs.
     if (cols.vrid < 0) {
-      const width = Math.max(headers.length, ...rows.map(r => r.length), 0);
       let best = 0;
       for (let i = 0; i < width; i++) {
         const hits = rows.filter(r => YMS_VRID_RE.test(normVrid(r[i]))).length;
         if (hits > best) { best = hits; cols.vrid = i; }
       }
+    }
+    // Any other column whose cells look like real AFT VRIDs (Oculus "VRID" holds appointment ids).
+    let bestReal = 0;
+    for (let i = 0; i < width; i++) {
+      if (i === cols.vrid) continue;
+      const hits = rows.filter(r => isAftVrid(normVrid(r[i]))).length;
+      if (hits > bestReal) { bestReal = hits; cols.realVrid = i; }
     }
     const hasData = cols.loadConfig >= 0 || cols.flType >= 0 || cols.pprSmall >= 0 || cols.pprMedium >= 0;
     if (cols.vrid < 0 || !hasData) return null;
@@ -1447,12 +1612,20 @@
     const val = (r, i) => (i >= 0 ? String(r[i] || '').trim() : '');
     let scraped = 0;
     const headerLogs = [];
+    const latest = new Map();   // appt -> row, current scrape only
+    let debugLogged = false;
 
     ymsReadGrids().forEach(g => {
       const cols = ymsMapColumns(g.headers, g.rows);
       if (!cols) return;
       headerLogs.push(g.type + ' {' + Object.keys(cols).map(k =>
         k + '=' + (cols[k] >= 0 ? '"' + (g.headers[cols[k]] || '(by cell pattern)') + '"#' + cols[k] : 'none')).join(', ') + '}');
+      if (!debugLogged) {
+        debugLogged = true;
+        console.log('[AFT/Oculus] headers:', JSON.stringify(Array.from(g.headers, (h, i) => [i, h == null ? '' : h])),
+          '(' + g.type + ', header cells ' + g.headerCount + ', body cells ' + g.bodyWidth + ', offset +' + g.offset + ')');
+        console.log('[AFT/Oculus] first row:', JSON.stringify(Array.from(g.rows[0] || [], (c, i) => [i, c == null ? '' : c])));
+      }
       g.rows.forEach(r => {
         const id = normVrid(r[cols.vrid]);
         if (!id) return;
@@ -1463,6 +1636,18 @@
           pprMedium: val(r, cols.pprMedium),
           seenAt: now,
         };
+        const realVrid = normVrid(val(r, cols.realVrid));
+        const cut = val(r, cols.cut);
+        latest.set(id, {
+          appt: id,
+          realVrid: isAftVrid(realVrid) ? realVrid : '',
+          cut,
+          cutTs: parseCutTs(cut),
+          flType: val(r, cols.flType),
+          units: val(r, cols.units),
+          status: val(r, cols.status),
+          loadConfig: val(r, cols.loadConfig),
+        });
         scraped++;
       });
     });
@@ -1474,6 +1659,7 @@
 
     console.log('[AFT/Oculus] scraped ' + scraped + ' rows, headers: ' + (headerLogs.join(' | ') || 'no matching grid found'));
     if (scraped > 0) {
+      GM_setValue(OC_LATEST_KEY, [...latest.values()]);
       GM_setValue(YMS_KEY, map);
       GM_setValue(YMS_TS_KEY, now);
     }
