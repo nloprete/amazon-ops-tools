@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AFT - Daily Receive Counter (3AM to 3AM)
 // @namespace    http://tampermonkey.net/
-// @version      1.0.14
+// @version      1.0.15
 // @description  Shows VRIDs, dates, and quantities received for the current day (3AM to 3AM). Hides closed trailers.
 // @updateURL    https://raw.githubusercontent.com/nloprete/amazon-ops-tools/main/aft-receive-counter.user.js
 // @downloadURL  https://raw.githubusercontent.com/nloprete/amazon-ops-tools/main/aft-receive-counter.user.js
@@ -592,7 +592,8 @@
       // Oculus "VRID" column holds Dock Master appointment ids; try the mapped appt first.
       const appt = apptMap[vrid] ? apptMap[vrid].appt : null;
       if (appt) apptMapped++;
-      const hit = (appt && yms[appt]) || lookupYms(vrid);
+      // Direct VRID match (Oculus row carries the VRID) beats the Dock Master appointment hop.
+      const hit = yms[vrid] || (appt && yms[appt]) || lookupYms(vrid);
       if (hit) matched++; else unmatched.push(vrid);
       const y = hit || {};
       rows += '<tr><td class="aft-vrid">' + escapeHtml(l.loadId) + '</td><td class="aft-date">' + dateStr + ' ' + timeStr + '</td><td class="aft-qty">' + l.qty.toLocaleString() + '</td>' +
@@ -1609,7 +1610,8 @@
       return sc;
     };
     const s0 = scoreShift(0), s1 = scoreShift(-1);
-    const shift = s0 > s1 ? 0 : -1;
+    // Only shift when the data clearly fits better; the "confirmed" -1 case turned out to be a row mismatch.
+    const shift = s1 > s0 ? -1 : 0;
     if (shift) {
       ['loadConfig', 'flType', 'pprSmall', 'pprMedium', 'cut', 'units', 'status'].forEach(k => {
         if (cols[k] >= 1) cols[k] += shift;
@@ -1663,6 +1665,8 @@
           seenAt: now,
         };
         const realVrid = normVrid(val(r, cols.realVrid));
+        // Also key by the real VRID when the row has one, so AFT can match directly (no Dock Master hop).
+        if (isAftVrid(realVrid)) map[realVrid] = Object.assign({}, map[id], { appt: id });
         const cut = val(r, cols.cut);
         latest.set(id, {
           appt: id,
