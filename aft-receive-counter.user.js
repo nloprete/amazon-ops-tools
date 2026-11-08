@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AFT - Daily Receive Counter (3AM to 3AM)
 // @namespace    http://tampermonkey.net/
-// @version      1.0.16
+// @version      1.0.17
 // @description  Shows VRIDs, dates, and quantities received for the current day (3AM to 3AM). Hides closed trailers.
 // @updateURL    https://raw.githubusercontent.com/nloprete/amazon-ops-tools/main/aft-receive-counter.user.js
 // @downloadURL  https://raw.githubusercontent.com/nloprete/amazon-ops-tools/main/aft-receive-counter.user.js
@@ -1077,6 +1077,7 @@
       };
 
       let periodHtml = '<div style="margin-top:8px;padding-top:8px;border-top:2px solid #4fc3f7;">';
+      periodHtml += '<div style="color:#4fc3f7;font-weight:700;font-size:13px;margin-bottom:8px;">🔄 Receive by Shift</div>';
 
       // Day shift
       periodHtml += '<div style="color:#ff9900;font-weight:700;font-size:11px;margin-bottom:4px;">☀️ Day (07:00–17:30)</div>';
