@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AFT - Daily Receive Counter (3AM to 3AM)
 // @namespace    http://tampermonkey.net/
-// @version      1.0.18
+// @version      1.0.19
 // @description  Shows VRIDs, dates, and quantities received for the current day (3AM to 3AM). Hides closed trailers.
 // @updateURL    https://raw.githubusercontent.com/nloprete/amazon-ops-tools/main/aft-receive-counter.user.js
 // @downloadURL  https://raw.githubusercontent.com/nloprete/amazon-ops-tools/main/aft-receive-counter.user.js
@@ -198,20 +198,6 @@
   const OC_MANUAL_STALE_MS = 60 * 1000;
   const OC_SYNC_TIMEOUT_MS = 45000;
 
-  // --- AFT data sharing (AFT -> Oculus panel) ---
-  const AFT_HOST = 'afttransshipmenthub-na.aka.amazon.com';
-  const AFT_DEFAULT_URL = 'https://' + AFT_HOST;
-  const AFT_LOADS_KEY = 'aftLoads';
-  const AFT_URL_KEY = 'aftUrl';
-  const AFT_STALE_MS = 4 * 60 * 1000;
-  const AFT_MANUAL_STALE_MS = 60 * 1000;
-  const AFT_SYNC_TIMEOUT_MS = 45000;
-  const AFT_FRAME_WAIT_MS = 30000;
-  const AFT_RENDER_DEBOUNCE_MS = 500;
-  // The panel runs on AFT (data from its own table) and on Oculus (data from GM 'aftLoads').
-  const IS_OCULUS = location.hostname === YMS_HOST;
-  const MIN_KEY = 'aftReceiveCounter.minimized.' + location.hostname;
-
   function normVrid(s) {
     return String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
   }
@@ -286,10 +272,10 @@
     return body.rows.length + '|' + body.textContent;
   }
 
-  // Every row of the AFT page table that has a parseable time (no shift-window filter).
-  function parseAftRows() {
+  function scanTable() {
+    const { start, end } = getShiftWindow();
     const table = getPageTable();
-    if (!table) return [];
+    if (!table) return { loads: [], totalQty: 0, totalLoads: 0 };
 
     // Find columns by header name
     const headers = [...table.querySelectorAll('thead th, thead td')];
@@ -320,7 +306,8 @@
     if (statusCol === -1) statusCol = 11;
 
     const rows = table.querySelectorAll('tbody tr');
-    const all = [];
+    const loads = [];
+    let totalQty = 0;
 
     rows.forEach(row => {
       const cells = [...row.querySelectorAll('td')];
@@ -339,52 +326,17 @@
       }
 
       if (!timeForFilter) return;
+      if (timeForFilter < start || timeForFilter >= end) return;
 
       const loadId = cells[loadIdCol]?.textContent.trim();
       const qty = parseInt((cells[qtyCol]?.textContent || '').trim().replace(/,/g, ''), 10) || 0;
 
-      all.push({ loadId, arrivalTime: timeForFilter, qty, status });
+      totalQty += qty;
+      loads.push({ loadId, arrivalTime: timeForFilter, qty, status });
     });
 
-    return all;
-  }
-
-  // Shift-window filter + newest-first sort, shared by both hosts.
-  function filterLoads(all) {
-    const { start, end } = getShiftWindow();
-    const loads = all.filter(l => !(l.arrivalTime < start || l.arrivalTime >= end));
-    const totalQty = loads.reduce((s, l) => s + l.qty, 0);
     loads.sort((a, b) => b.arrivalTime - a.arrivalTime);
     return { loads, totalQty, totalLoads: loads.length };
-  }
-
-  // Share every parsed AFT row (any time) so the Oculus panel can apply its own window.
-  function publishAftLoads(all) {
-    GM_setValue(AFT_LOADS_KEY, {
-      savedAt: Date.now(),
-      url: location.href,
-      rows: all.map(l => ({ loadId: l.loadId, ts: l.arrivalTime.getTime(), qty: l.qty, status: l.status })),
-    });
-    GM_setValue(AFT_URL_KEY, location.href);
-  }
-
-  // Oculus side: rehydrate the shared AFT rows.
-  function readSharedAftLoads() {
-    const d = GM_getValue(AFT_LOADS_KEY, null);
-    if (!d || !Array.isArray(d.rows)) return [];
-    return d.rows
-      .filter(r => r && typeof r.ts === 'number' && !isNaN(r.ts))
-      .map(r => ({ loadId: String(r.loadId || ''), arrivalTime: new Date(r.ts), qty: Number(r.qty) || 0, status: String(r.status || '') }));
-  }
-
-  function scanTable() {
-    if (IS_OCULUS) return filterLoads(readSharedAftLoads());
-    const all = parseAftRows();
-    // Skip empty scans (page still loading) so they never overwrite good shared data.
-    if (all.length) {
-      try { publishAftLoads(all); } catch (e) { console.warn('[AFT/Share] publish failed:', e); }
-    }
-    return filterLoads(all);
   }
 
   function getStatusClass(status) {
@@ -398,21 +350,12 @@
     const defaults = getDefaultTimes();
     const panel = document.createElement('div');
     panel.className = 'aft-panel';
-    panel.innerHTML = '<div class="aft-title">📦 Daily Receive<button class="aft-min-btn">▲</button></div><div class="aft-body"><div class="aft-yms-status" id="aft-src-status" style="display:none"></div><div class="aft-inputs"><label>From:</label><input type="datetime-local" class="aft-input" id="aft-start" value="' + defaults.startStr + '"><label>To:</label><input type="datetime-local" class="aft-input" id="aft-end" value="' + defaults.endStr + '"></div><div class="aft-summary"><div class="aft-goal-group"><div class="aft-stat"><div class="val" id="aft-total">...</div><div class="lbl">TOTAL QTY</div></div><div class="aft-stat"><input type="text" inputmode="numeric" class="aft-goal-input" id="aft-goal" placeholder="—" aria-label="S1 Goal"><div class="lbl">S1 GOAL</div></div><div class="aft-stat"><div class="val" id="aft-gap" style="color:#78909c">—</div><div class="lbl">GAP</div></div><div class="aft-stat"><div class="val" id="aft-pct" style="color:#78909c">—</div><div class="lbl">COMPLETE</div></div><div class="aft-stat"><div class="val" id="aft-stow-total" style="color:#b388ff">...</div><div class="lbl">STOW VOL</div></div></div><div class="aft-stat"><div class="val" id="aft-loads" style="color:#4fc3f7">...</div><div class="lbl">LOADS</div></div><div class="aft-stat"><div class="val" id="aft-missing-count" style="color:#ff5252">...</div><div class="lbl">MISSING</div></div></div><div style="display:flex;gap:24px;flex:1;min-height:0;overflow:hidden;"><div id="aft-hourly-section" style="flex:1;overflow-y:auto;min-width:0;"></div><div id="aft-stow-section" style="flex:1;overflow-y:auto;min-width:0;"></div><div id="aft-period-section" style="flex:0.7;overflow-y:auto;min-width:0;"></div><div id="aft-results" style="flex:2.2;overflow-y:auto;min-width:0;"></div><div style="flex:1;overflow-y:auto;min-width:0;"><div id="aft-missing-section"></div><div id="aft-next-cuts" class="aft-next-cuts"></div></div></div><button class="aft-refresh" id="aft-refresh">↻ Refresh</button><div class="aft-time-range" id="aft-range"></div></div>';
+    panel.innerHTML = '<div class="aft-title">📦 Daily Receive<button class="aft-min-btn">▲</button></div><div class="aft-body"><div class="aft-inputs"><label>From:</label><input type="datetime-local" class="aft-input" id="aft-start" value="' + defaults.startStr + '"><label>To:</label><input type="datetime-local" class="aft-input" id="aft-end" value="' + defaults.endStr + '"></div><div class="aft-summary"><div class="aft-goal-group"><div class="aft-stat"><div class="val" id="aft-total">...</div><div class="lbl">TOTAL QTY</div></div><div class="aft-stat"><input type="text" inputmode="numeric" class="aft-goal-input" id="aft-goal" placeholder="—" aria-label="S1 Goal"><div class="lbl">S1 GOAL</div></div><div class="aft-stat"><div class="val" id="aft-gap" style="color:#78909c">—</div><div class="lbl">GAP</div></div><div class="aft-stat"><div class="val" id="aft-pct" style="color:#78909c">—</div><div class="lbl">COMPLETE</div></div><div class="aft-stat"><div class="val" id="aft-stow-total" style="color:#b388ff">...</div><div class="lbl">STOW VOL</div></div></div><div class="aft-stat"><div class="val" id="aft-loads" style="color:#4fc3f7">...</div><div class="lbl">LOADS</div></div><div class="aft-stat"><div class="val" id="aft-missing-count" style="color:#ff5252">...</div><div class="lbl">MISSING</div></div></div><div style="display:flex;gap:24px;flex:1;min-height:0;overflow:hidden;"><div id="aft-hourly-section" style="flex:1;overflow-y:auto;min-width:0;"></div><div id="aft-stow-section" style="flex:1;overflow-y:auto;min-width:0;"></div><div id="aft-period-section" style="flex:0.7;overflow-y:auto;min-width:0;"></div><div id="aft-results" style="flex:2.2;overflow-y:auto;min-width:0;"></div><div style="flex:1;overflow-y:auto;min-width:0;"><div id="aft-missing-section"></div><div id="aft-next-cuts" class="aft-next-cuts"></div></div></div><button class="aft-refresh" id="aft-refresh">↻ Refresh</button><div class="aft-time-range" id="aft-range"></div></div>';
     document.body.appendChild(panel);
 
-    // Minimized state persists per host; default expanded on AFT, minimized on Oculus.
-    const minBtn = panel.querySelector('.aft-min-btn');
-    const savedMin = localStorage.getItem(MIN_KEY);
-    if (savedMin === null ? IS_OCULUS : savedMin === '1') {
-      panel.classList.add('minimized');
-      minBtn.textContent = '▼';
-    }
-    minBtn.addEventListener('click', () => {
+    panel.querySelector('.aft-min-btn').addEventListener('click', () => {
       panel.classList.toggle('minimized');
-      const isMin = panel.classList.contains('minimized');
-      minBtn.textContent = isMin ? '▼' : '▲';
-      localStorage.setItem(MIN_KEY, isMin ? '1' : '0');
+      panel.querySelector('.aft-min-btn').textContent = panel.classList.contains('minimized') ? '▼' : '▲';
     });
 
     const titleBar = panel.querySelector('.aft-title');
@@ -453,20 +396,13 @@
     });
 
     refresh();
+    startTableObserver();
 
     // Re-render just the VRID table when the YMS tab pushes new data (no KIPS/FCLM calls).
     GM_addValueChangeListener(YMS_KEY, () => { renderResults(lastLoads); renderNextCuts(); });
     GM_addValueChangeListener(OC_LATEST_KEY, () => renderNextCuts());
-    // Keep the relative "in 2h 15m" / "Xm ago" times current.
-    setInterval(() => { renderNextCuts(); renderAftSource(); }, 60000);
-
-    // Oculus: data comes from GM storage; no AFT table observer, Dock Master, or Oculus iframe sync.
-    if (IS_OCULUS) {
-      aftInit();
-      return;
-    }
-
-    startTableObserver();
+    // Keep the relative "in 2h 15m" times current.
+    setInterval(renderNextCuts, 60000);
 
     // Dock Master frames/tabs write VRID -> appointment results here; wake their waiters and re-render.
     GM_addValueChangeListener(DM_KEY, (name, oldVal, newVal) => {
@@ -530,13 +466,6 @@
     const btn = document.getElementById('aft-refresh');
     const originalText = btn ? btn.textContent : '';
     manualInProgress = true;
-    if (IS_OCULUS) {
-      // Never click Oculus's own buttons: re-scrape this page, pull AFT if stale, re-render.
-      try { ymsScrape(); } catch (e) { console.warn('[AFT/Oculus] scrape failed:', e); }
-      aftSync(AFT_MANUAL_STALE_MS);
-      try { refresh(); } finally { manualInProgress = false; }
-      return;
-    }
     // Also pull fresh Oculus data if the last sync is older than a minute (runs in parallel).
     ocSync(OC_MANUAL_STALE_MS);
     if (btn) { btn.disabled = true; btn.textContent = '⏳ Refreshing...'; }
@@ -671,14 +600,11 @@
         ymsCell(y.loadConfig) + ymsCell(y.cut || '') + ymsCell(y.pprSmall) + '</tr>';
     });
 
-    // Dock Master isn't used on Oculus (rows there are keyed by real VRID).
-    const dmStatus = IS_OCULUS ? '' : ' · Dock Master: ' + (dmQueueRunning ? 'looking up ' + dmInFlight.size + '… · ' : '') +
+    const dmStatus = ' · Dock Master: ' + (dmQueueRunning ? 'looking up ' + dmInFlight.size + '… · ' : '') +
       'matched ' + apptMapped + '/' + loads.length;
     const statusHtml = ymsCount > 0
       ? '<div class="aft-yms-status">Oculus synced ' + formatAgo(GM_getValue(YMS_TS_KEY, 0)) + ' (' + ymsCount + ')' + (ocSyncing ? ' · syncing…' : '') + escapeHtml(dmStatus) + '</div>'
-      : IS_OCULUS
-        ? '<div class="aft-yms-status">Oculus: reading this page…</div>'
-        : '<div class="aft-yms-status"><a href="' + YMS_URL + '" target="_blank" rel="noopener noreferrer">' + (ocSyncing ? 'Oculus: syncing…' : 'Oculus: no data — open Oculus tab') + '</a>' + escapeHtml(dmStatus) + '</div>';
+      : '<div class="aft-yms-status"><a href="' + YMS_URL + '" target="_blank" rel="noopener noreferrer">' + (ocSyncing ? 'Oculus: syncing…' : 'Oculus: no data — open Oculus tab') + '</a>' + escapeHtml(dmStatus) + '</div>';
 
     console.log('[AFT/Oculus] matched ' + matched + '/' + loads.length + ' AFT VRIDs against ' + ymsKeys.length + ' Oculus VRIDs (appointment-mapped ' + apptMapped + '/' + loads.length + '). Sample AFT unmatched: ' + unmatched.slice(0, 5).join(', ') + ' | sample Oculus keys: ' + ymsKeys.slice(0, 5).join(', '));
 
@@ -863,185 +789,6 @@
     setInterval(() => ocSync(OC_STALE_MS), OC_SYNC_INTERVAL_MS);
   }
 
-  // --- AFT auto-sync (Oculus side) ---
-  // The AFT script inside the frame/tab publishes aftLoads after its first scan.
-  let aftMode = 'iframe';          // switches to 'tab' for the session if iframes are blocked
-  let aftSyncing = false;          // only one sync at a time
-  let aftIframeTimeouts = 0;       // consecutive iframe syncs with no aftLoads change
-  let aftWaiter = null;            // resolver, woken by the aftLoads listener
-  let aftRenderTimer = null;
-
-  function aftSavedAt() {
-    const d = GM_getValue(AFT_LOADS_KEY, null);
-    return (d && d.savedAt) || 0;
-  }
-
-  // Stored AFT URL, only if it points at the AFT host.
-  function aftStoredUrl() {
-    const u = GM_getValue(AFT_URL_KEY, '');
-    return typeof u === 'string' && u.indexOf('https://' + AFT_HOST + '/') === 0 ? u : '';
-  }
-
-  // Oculus-only status line: data age, syncing, or a link to open AFT.
-  function renderAftSource() {
-    const el = document.getElementById('aft-src-status');
-    if (!el || !IS_OCULUS) return;
-    el.style.display = '';
-    const savedAt = aftSavedAt();
-    const url = aftStoredUrl();
-    let html;
-    if (savedAt) {
-      html = 'AFT data from ' + escapeHtml(formatAgo(savedAt)) + (aftSyncing ? ' · syncing…' : '');
-    } else if (aftSyncing) {
-      html = 'No AFT data yet — syncing…';
-    } else {
-      html = '<a href="' + escapeHtml(url || AFT_DEFAULT_URL) + '" target="_blank" rel="noopener noreferrer">Open AFT once to link</a>';
-    }
-    el.innerHTML = html;
-  }
-
-  // Resolves true when aftLoads.savedAt moves past its current value, false on timeout.
-  function aftWait(ms) {
-    return new Promise(resolve => {
-      const since = aftSavedAt();
-      const timer = setTimeout(() => {
-        aftWaiter = null;
-        resolve(false);
-      }, ms);
-      aftWaiter = ts => {
-        if (!(ts > since)) return;
-        clearTimeout(timer);
-        aftWaiter = null;
-        resolve(true);
-      };
-    });
-  }
-
-  async function aftSyncIframe(url) {
-    const wait = aftWait(AFT_SYNC_TIMEOUT_MS);
-    const frame = document.createElement('iframe');
-    frame.className = 'aft-aft-frame';
-    frame.setAttribute('aria-hidden', 'true');
-    frame.tabIndex = -1;
-    frame.style.cssText = 'position:fixed;left:-10000px;top:0;width:1600px;height:1200px;opacity:0;pointer-events:none;border:0;';
-    frame.src = url;
-    document.body.appendChild(frame);
-    const ok = await wait;
-    frame.remove();
-    return ok;
-  }
-
-  async function aftSyncTab(url) {
-    const wait = aftWait(AFT_SYNC_TIMEOUT_MS);
-    let tab = null;
-    try {
-      tab = GM_openInTab(url, { active: false, insert: true, setParent: true });
-    } catch (e) {
-      console.warn('[AFT/Share] GM_openInTab failed:', e);
-    }
-    const ok = await wait;
-    try { if (tab && typeof tab.close === 'function') tab.close(); } catch (e) { /* tab already gone */ }
-    return ok;
-  }
-
-  // Loads AFT in the background if the shared data is older than maxAgeMs.
-  async function aftSync(maxAgeMs) {
-    if (aftSyncing) return;
-    if (Date.now() - aftSavedAt() <= maxAgeMs) return;
-    const url = aftStoredUrl();
-    if (!url) {
-      console.log('[AFT/Share] no AFT URL stored yet; open AFT once to link.');
-      renderAftSource();
-      return;
-    }
-    aftSyncing = true;
-    renderAftSource();
-    const mode = aftMode;
-    let ok = false;
-    let switched = false;
-    try {
-      ok = await (mode === 'tab' ? aftSyncTab(url) : aftSyncIframe(url));
-    } catch (e) {
-      console.warn('[AFT/Share] auto-sync failed:', e);
-    } finally {
-      console.log('[AFT/Share] AFT auto-sync via ' + mode + ': ' + (ok ? 'ok' : 'timeout'));
-      if (mode === 'iframe') {
-        aftIframeTimeouts = ok ? 0 : aftIframeTimeouts + 1;
-        if (aftIframeTimeouts >= 2 && aftMode === 'iframe') {
-          aftMode = 'tab';
-          switched = true;
-          console.log('[AFT/Share] 2 AFT iframe syncs timed out (likely X-Frame-Options/CSP); switching to background tabs for this session.');
-        }
-      }
-      aftSyncing = false;
-      renderAftSource();
-    }
-    if (switched) aftSync(maxAgeMs);
-  }
-
-  function aftInit() {
-    GM_addValueChangeListener(AFT_LOADS_KEY, (name, oldVal, newVal) => {
-      if (aftWaiter) aftWaiter(newVal && newVal.savedAt);
-      // Debounced; fromObserver reuses the KIPS/FCLM network throttle.
-      clearTimeout(aftRenderTimer);
-      aftRenderTimer = setTimeout(() => refresh({ fromObserver: true }), AFT_RENDER_DEBOUNCE_MS);
-    });
-    GM_addValueChangeListener(AFT_URL_KEY, () => renderAftSource());
-    aftSync(AFT_STALE_MS);
-    setInterval(() => aftSync(AFT_STALE_MS), OC_SYNC_INTERVAL_MS);
-    setInterval(refresh, 120000);
-  }
-
-  // --- AFT inside a hidden iframe (opened by the Oculus panel): publish only, no panel ---
-  function initAftFrame() {
-    const startedAt = Date.now();
-    let done = false;
-    let pending = false;
-    let poller = null;
-    let observer = null;
-
-    const stop = () => {
-      done = true;
-      if (observer) observer.disconnect();
-      clearInterval(poller);
-    };
-    const publish = () => {
-      try {
-        const all = parseAftRows();
-        if (all.length) publishAftLoads(all);
-        console.log('[AFT/Share] frame published ' + all.length + ' AFT rows');
-      } catch (e) {
-        console.warn('[AFT/Share] frame publish failed:', e);
-      }
-    };
-    const check = () => {
-      if (done) return;
-      let rows = 0;
-      try { rows = parseAftRows().length; } catch (e) { /* table still rendering */ }
-      if (rows > 0) {
-        stop();
-        // Same "show all entries" step as the top window, then let the table re-render.
-        let expanded = false;
-        try { expanded = expandPageSize(); } catch (e) { /* no usable page-size select */ }
-        setTimeout(publish, expanded ? 3000 : 300);
-        return;
-      }
-      if (Date.now() - startedAt >= AFT_FRAME_WAIT_MS) {
-        stop();
-        console.log('[AFT/Share] frame: no AFT rows within ' + AFT_FRAME_WAIT_MS + 'ms');
-      }
-    };
-
-    observer = new MutationObserver(() => {
-      if (pending || done) return;
-      pending = true;
-      setTimeout(() => { pending = false; check(); }, 250);
-    });
-    observer.observe(document.body || document.documentElement, { childList: true, subtree: true, characterData: true });
-    poller = setInterval(check, 1000);
-    check();
-  }
-
   // --- Dock Master lookups (AFT side) ---
   let dmMode = 'iframe';           // switches to 'tab' for the session if iframes are blocked
   let dmQueueRunning = false;
@@ -1205,9 +952,8 @@
   function refresh(opts) {
     // Event objects / interval calls count as forced; only the observer passes fromObserver.
     const fromObserver = !!(opts && opts.fromObserver === true);
-    if (!IS_OCULUS) lastTableSig = getTableSignature();
+    lastTableSig = getTableSignature();
     const { loads, totalQty, totalLoads } = scanTable();
-    renderAftSource();
     const { start, end } = getShiftWindow();
 
     document.getElementById('aft-total').textContent = totalQty.toLocaleString();
@@ -1218,7 +964,7 @@
     lastLoads = loads;
     renderResults(loads);
     renderNextCuts();
-    if (!IS_OCULUS) dmQueueLookups(loads);
+    dmQueueLookups(loads);
 
     // Hourly breakdown — left column
     const hourlySection = document.getElementById('aft-hourly-section');
@@ -1650,23 +1396,6 @@
     section.innerHTML = html;
   }
 
-  // Try to show all entries by changing the page size dropdown; returns true if one was found.
-  function expandPageSize() {
-    const showEntries = document.querySelector('select[name*="length"], .dataTables_length select');
-    if (!showEntries) return false;
-    // Look for an "All" option or set to max
-    const allOption = [...showEntries.options].find(o => o.value === '-1' || o.textContent.trim().toLowerCase() === 'all');
-    if (allOption) {
-      showEntries.value = allOption.value;
-    } else {
-      // Set to highest available
-      const maxOpt = [...showEntries.options].reduce((max, o) => parseInt(o.value) > parseInt(max.value) ? o : max);
-      showEntries.value = maxOpt.value;
-    }
-    showEntries.dispatchEvent(new Event('change', { bubbles: true }));
-    return true;
-  }
-
   function init() {
     let polls = 0;
     const poller = setInterval(() => {
@@ -1675,7 +1404,20 @@
       if ((rows && rows.length > 0) || polls >= 20) {
         clearInterval(poller);
 
-        if (expandPageSize()) {
+        // Try to show all entries by changing the page size dropdown
+        const showEntries = document.querySelector('select[name*="length"], .dataTables_length select');
+        if (showEntries) {
+          // Look for an "All" option or set to max
+          const allOption = [...showEntries.options].find(o => o.value === '-1' || o.textContent.trim().toLowerCase() === 'all');
+          if (allOption) {
+            showEntries.value = allOption.value;
+          } else {
+            // Set to highest available
+            const maxOpt = [...showEntries.options].reduce((max, o) => parseInt(o.value) > parseInt(max.value) ? o : max);
+            showEntries.value = maxOpt.value;
+          }
+          showEntries.dispatchEvent(new Event('change', { bubbles: true }));
+
           // Also click "Received Time" header to sort by it
           setTimeout(() => {
             const headers = document.querySelectorAll('table thead th');
@@ -1773,11 +1515,8 @@
   function ymsReadGrids() {
     const grids = [];
 
-    // Never read our own panel (its tables have "Cut Time"/"PPR Small" headers).
-    const isOwn = el => !!el.closest('.aft-yms-badge, .aft-panel');
-
     document.querySelectorAll('table').forEach(t => {
-      if (isOwn(t)) return;
+      if (t.closest('.aft-yms-badge')) return;
       let headerCells = [];
       if (t.tHead && t.tHead.rows.length) {
         headerCells = [...t.tHead.rows[t.tHead.rows.length - 1].cells];
@@ -1796,12 +1535,12 @@
     });
 
     let containers = [...document.querySelectorAll('[role="grid"], [role="treegrid"], [role="table"]')]
-      .filter(c => c.tagName !== 'TABLE' && !isOwn(c));
-    if (!containers.length && [...document.querySelectorAll('[role="columnheader"]')].some(h => !isOwn(h))) containers = [document.body];
+      .filter(c => c.tagName !== 'TABLE');
+    if (!containers.length && document.querySelector('[role="columnheader"]')) containers = [document.body];
     containers.forEach(c => {
-      const headerCells = [...c.querySelectorAll('[role="columnheader"]')].filter(h => !isOwn(h));
+      const headerCells = [...c.querySelectorAll('[role="columnheader"]')];
       const rowEls = [...c.querySelectorAll('[role="row"]')]
-        .filter(r => !isOwn(r) && r.querySelector('[role="gridcell"], [role="cell"]'));
+        .filter(r => r.querySelector('[role="gridcell"], [role="cell"]'));
       if (!headerCells.length || !rowEls.length) return;
       grids.push(ymsAlignGrid({
         type: 'aria',
@@ -1966,13 +1705,11 @@
     setTimeout(run, 3000);
 
     let ymsTimer = null;
-    // Ignore our badge, panel, and hidden AFT iframe: panel re-renders must never retrigger a scrape.
-    const OWN_SEL = '.aft-yms-badge, .aft-panel, .aft-aft-frame';
-    const isBadge = n => n && n.nodeType === 1 && n.matches(OWN_SEL);
+    const isBadge = n => n && n.nodeType === 1 && n.classList.contains('aft-yms-badge');
     const observer = new MutationObserver(mutations => {
       const relevant = mutations.some(m => {
         const el = m.target && (m.target.nodeType === 1 ? m.target : m.target.parentElement);
-        if (el && el.closest(OWN_SEL)) return false;
+        if (el && el.closest('.aft-yms-badge')) return false;
         if (m.type !== 'childList') return true;
         const nodes = [...m.addedNodes, ...m.removedNodes];
         return nodes.length === 0 || nodes.some(n => !isBadge(n));
@@ -2058,14 +1795,11 @@
     check();
   }
 
-  // Hosts: Dock Master (IDX) scraper; Oculus scraper (+ panel in the top window only);
-  // AFT panel in the top window, or publish-only inside an iframe. Never a panel in a frame.
-  const isTopWindow = window.top === window.self;
+  // Three hosts: Dock Master (IDX) scraper, Oculus scraper, or the AFT panel (top window only).
   let startup = null;
   if (location.hostname === DM_HOST) startup = initDockMaster;
-  else if (IS_OCULUS) startup = isTopWindow ? () => { initYms(); buildPanel(); } : initYms;
-  else if (isTopWindow) startup = init;
-  else startup = initAftFrame;
+  else if (location.hostname === YMS_HOST) startup = initYms;
+  else if (window.top === window.self) startup = init;
   if (startup) {
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', startup);
     else startup();
