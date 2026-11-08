@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AFT - Daily Receive Counter (3AM to 3AM)
 // @namespace    http://tampermonkey.net/
-// @version      1.0.15
+// @version      1.0.16
 // @description  Shows VRIDs, dates, and quantities received for the current day (3AM to 3AM). Hides closed trailers.
 // @updateURL    https://raw.githubusercontent.com/nloprete/amazon-ops-tools/main/aft-receive-counter.user.js
 // @downloadURL  https://raw.githubusercontent.com/nloprete/amazon-ops-tools/main/aft-receive-counter.user.js
@@ -680,7 +680,8 @@
         '<td class="aft-qty">' + groupUnits.toLocaleString() + '</td></tr>';
 
       g.rows.forEach(r => {
-        const vrid = r.realVrid || apptToVrid[normVrid(r.appt)];
+        // Oculus's VRID column holds real VRIDs (ISA is the appointment id), so r.appt is usually the VRID itself.
+        const vrid = r.realVrid || (isAftVrid(normVrid(r.appt)) ? r.appt : apptToVrid[normVrid(r.appt)]);
         const vridHtml = vrid
           ? '<span class="aft-vrid">' + escapeHtml(vrid) + '</span>'
           : '<span style="color:#78909c;font-style:italic;" title="Appointment ID (no VRID on Oculus)">' + escapeHtml(r.appt) + '</span>';
