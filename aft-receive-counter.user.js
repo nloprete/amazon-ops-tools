@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AFT - Daily Receive Counter (3AM to 3AM)
 // @namespace    http://tampermonkey.net/
-// @version      1.0.13
+// @version      1.0.14
 // @description  Shows VRIDs, dates, and quantities received for the current day (3AM to 3AM). Hides closed trailers.
 // @updateURL    https://raw.githubusercontent.com/nloprete/amazon-ops-tools/main/aft-receive-counter.user.js
 // @downloadURL  https://raw.githubusercontent.com/nloprete/amazon-ops-tools/main/aft-receive-counter.user.js
@@ -596,7 +596,7 @@
       if (hit) matched++; else unmatched.push(vrid);
       const y = hit || {};
       rows += '<tr><td class="aft-vrid">' + escapeHtml(l.loadId) + '</td><td class="aft-date">' + dateStr + ' ' + timeStr + '</td><td class="aft-qty">' + l.qty.toLocaleString() + '</td>' +
-        ymsCell(y.loadConfig) + ymsCell(y.flType) + ymsCell(y.pprSmall) + '</tr>';
+        ymsCell(y.loadConfig) + ymsCell(y.cut || '') + ymsCell(y.pprSmall) + '</tr>';
     });
 
     const dmStatus = ' · Dock Master: ' + (dmQueueRunning ? 'looking up ' + dmInFlight.size + '… · ' : '') +
@@ -1591,6 +1591,31 @@
     }
     const hasData = cols.loadConfig >= 0 || cols.flType >= 0 || cols.pprSmall >= 0 || cols.pprMedium >= 0;
     if (cols.vrid < 0 || !hasData) return null;
+
+    // Header/body misalignment: confirmed live, the cell under header "PPR Small" held PPR Medium's
+    // value and "FL Type" held a date. So body cells sit one column LEFT of their headers
+    // (an extra header cell after VRID). Score shift 0 vs -1 on the data and pick the better fit;
+    // a tie goes to -1, the confirmed case.
+    const sample = rows.slice(0, 40);
+    const scoreShift = s => {
+      let sc = 0;
+      sample.forEach(r => {
+        const g = i => (i >= 1 ? String(r[i + s] || '').trim() : '');
+        if (cols.status >= 1 && /arriv|check|closed|sched|depart|cancel|unload|yard|dock/i.test(g(cols.status))) sc += 2;
+        if (cols.cut >= 1 && parseCutTs(g(cols.cut)) !== null) sc++;
+        if (cols.units >= 1 && /^\d[\d,]*$/.test(g(cols.units))) sc++;
+        if (cols.flType >= 1 && g(cols.flType) && parseCutTs(g(cols.flType)) === null) sc++;
+      });
+      return sc;
+    };
+    const s0 = scoreShift(0), s1 = scoreShift(-1);
+    const shift = s0 > s1 ? 0 : -1;
+    if (shift) {
+      ['loadConfig', 'flType', 'pprSmall', 'pprMedium', 'cut', 'units', 'status'].forEach(k => {
+        if (cols[k] >= 1) cols[k] += shift;
+      });
+    }
+    console.log('[AFT/Oculus] column shift ' + shift + ' (score shift0=' + s0 + ', shift-1=' + s1 + ')');
     return cols;
   }
 
@@ -1634,6 +1659,7 @@
           flType: val(r, cols.flType),
           pprSmall: val(r, cols.pprSmall),
           pprMedium: val(r, cols.pprMedium),
+          cut: val(r, cols.cut),
           seenAt: now,
         };
         const realVrid = normVrid(val(r, cols.realVrid));
