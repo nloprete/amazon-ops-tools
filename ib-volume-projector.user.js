@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         IB Flow - Volume Projector
 // @namespace    http://tampermonkey.net/
-// @version      1.0
+// @version      1.3
 // @description  Calculates expected volume potential for the remainder of the shift using Hours Left × Headcount × ETI Rate
 // @updateURL    https://raw.githubusercontent.com/nloprete/amazon-ops-tools/main/ib-volume-projector.user.js
 // @downloadURL  https://raw.githubusercontent.com/nloprete/amazon-ops-tools/main/ib-volume-projector.user.js
@@ -223,7 +223,35 @@
       }
     }
 
-    return { stations, etiRate, hoursElapsed, currentVolume, ibHours };
+    // Scrape IB Total row (Volume, Hours, Rate) - rate is the third/last number
+    // Structure-agnostic: find the element whose own text is exactly "IB Total"
+    // (it's a link on the dashboard), then walk up to the nearest ancestor that
+    // holds the row's numbers and read them from the text after the label.
+    let ibTotal = null;
+    const ibLabels = Array.from(document.querySelectorAll('a, span, div, td, th, p, button, strong, b'))
+      .filter(el => !el.closest('.vol-proj-panel') && /^IB\s*Total$/i.test((el.textContent || '').trim()));
+    for (const label of ibLabels) {
+      let node = label;
+      for (let depth = 0; depth < 8 && node && node !== document.body; depth++) {
+        const fullText = node.innerText || node.textContent || '';
+        const labelMatch = fullText.match(/IB\s*Total/i);
+        const afterLabel = labelMatch ? fullText.slice(labelMatch.index + labelMatch[0].length) : fullText;
+        const nums = (afterLabel.match(/\d[\d,]*(?:\.\d+)?/g) || [])
+          .map(n => parseFloat(n.replace(/,/g, '')));
+        if (nums.length >= 3) {
+          // Volume, Hours, Rate -> rate is the third number after the label
+          ibTotal = nums[2];
+          break;
+        }
+        node = node.parentElement;
+      }
+      if (ibTotal !== null) break;
+    }
+    if (ibTotal === null) {
+      console.debug('[Volume Projector] IB Total row not found. Labels matched:', ibLabels.length);
+    }
+
+    return { stations, etiRate, hoursElapsed, currentVolume, ibHours, ibTotal };
   }
 
   // --- Build Panel ---
@@ -311,9 +339,26 @@
         <div id="vp-pace-fill" style="height:100%;border-radius:3px;width:0%;transition:width 0.5s;"></div>
       </div>
       <div class="vp-divider"></div>
+      <div class="vp-row">
+        <span class="vp-label">IB Total Rate</span>
+        <span class="vp-value" id="vp-ib-total">...</span>
+      </div>
+      <div class="vp-row">
+        <span class="vp-label">IB Total Goal</span>
+        <input type="number" step="0.1" id="vp-ib-goal-input" placeholder="Enter rate" style="background:#2a2a4e;border:1px solid #4fc3f7;color:#fff;border-radius:4px;padding:2px 6px;width:90px;font-size:12px;font-weight:700;text-align:right;font-family:'Amazon Ember',Arial,sans-serif;">
+      </div>
+      <div class="vp-row">
+        <span class="vp-label">IB Rate vs Goal</span>
+        <span class="vp-value" id="vp-ib-pace">...</span>
+      </div>
+      <div style="height:6px;border-radius:3px;background:#3a4553;margin-top:4px;overflow:hidden;">
+        <div id="vp-ib-pace-fill" style="height:100%;border-radius:3px;width:0%;transition:width 0.5s;"></div>
+      </div>
+      <div class="vp-divider"></div>
       <div style="font-size:11px;color:#78909c;margin-bottom:4px;">📅 Historical</div>
       <div class="vp-row"><span class="vp-label">Yesterday at this point</span><span class="vp-value" id="vp-hist-yesterday">—</span></div>
       <div class="vp-row"><span class="vp-label">Last week avg at this point</span><span class="vp-value" id="vp-hist-week">—</span></div>
+      <div class="vp-row"><span class="vp-label">IB Total yesterday at this point</span><span class="vp-value" id="vp-hist-ib-yesterday">—</span></div>
       <div class="vp-timestamp" id="vp-timestamp"></div>
       </div>
     `;
@@ -361,27 +406,35 @@
       updatePanel();
     });
 
+    // IB Total goal input — save and recalculate on change
+    const ibGoalInput = panel.querySelector('#vp-ib-goal-input');
+    const savedIbGoal = localStorage.getItem('vp_ib_total_goal') || '';
+    if (savedIbGoal) ibGoalInput.value = savedIbGoal;
+    ibGoalInput.addEventListener('input', () => {
+      localStorage.setItem('vp_ib_total_goal', ibGoalInput.value);
+      updatePanel();
+    });
+
     // Minimize toggle
     const minBtn = panel.querySelector('#vp-minimize');
-    let minimized = localStorage.getItem('vp_minimized') === 'true';
+    // Always start expanded when the dashboard loads; minimize only lasts for this page view
+    let minimized = false;
+    localStorage.removeItem('vp_minimized');
 
     function applyMinimize() {
       panel.classList.toggle('minimized', minimized);
       minBtn.textContent = minimized ? '□' : '—';
     }
 
-    if (minimized) applyMinimize();
-
     minBtn.addEventListener('click', (e) => {
       e.stopPropagation();
       minimized = !minimized;
-      localStorage.setItem('vp_minimized', minimized);
       applyMinimize();
     });
   }
 
   function updatePanel() {
-    const { stations, etiRate, hoursElapsed, currentVolume, ibHours } = scrapePageData();
+    const { stations, etiRate, hoursElapsed, currentVolume, ibHours, ibTotal } = scrapePageData();
     const { remaining, shiftName, elapsed, shiftHours } = getShiftInfo();
 
     const stationsEl = document.getElementById('vp-stations');
@@ -539,10 +592,35 @@
       paceFill.style.width = '0%';
     }
 
+    // IB Total rate vs goal
+    const ibTotalEl = document.getElementById('vp-ib-total');
+    const ibGoalInput = document.getElementById('vp-ib-goal-input');
+    const ibPaceEl = document.getElementById('vp-ib-pace');
+    const ibPaceFill = document.getElementById('vp-ib-pace-fill');
+    const ibGoal = parseFloat(ibGoalInput?.value) || 0;
+
+    ibTotalEl.textContent = ibTotal ? ibTotal.toFixed(1) : '—';
+
+    if (ibGoal > 0 && ibTotal) {
+      const ibDiff = ibTotal - ibGoal;
+      const ibPct = Math.round((ibTotal / ibGoal) * 100);
+      const ibColor = ibDiff >= 0 ? '#69f0ae' : (ibPct >= 90 ? '#ff9800' : '#ff5252');
+      ibPaceEl.textContent = ibDiff >= 0
+        ? `ON PACE +${ibDiff.toFixed(1)} (${ibPct}%)`
+        : `BEHIND ${ibDiff.toFixed(1)} (${ibPct}%)`;
+      ibPaceEl.style.color = ibColor;
+      ibPaceFill.style.width = Math.min(ibPct, 100) + '%';
+      ibPaceFill.style.background = ibColor;
+    } else {
+      ibPaceEl.textContent = ibGoal > 0 ? 'Waiting for data...' : 'Enter goal above';
+      ibPaceEl.style.color = '#78909c';
+      ibPaceFill.style.width = '0%';
+    }
+
     tsEl.textContent = 'Updated ' + new Date().toLocaleTimeString();
 
     // --- Historical data recording & comparison ---
-    if (currentVolume && hrs) {
+    if ((currentVolume || ibTotal) && hrs) {
       // Record current snapshot
       const today = new Date().toISOString().split('T')[0];
       const shiftKey = shiftName.toLowerCase();
@@ -557,7 +635,7 @@
       // Only record every ~0.5h to avoid bloat (check if we already have a close entry)
       const lastEntry = history[dayKey][history[dayKey].length - 1];
       if (!lastEntry || Math.abs(lastEntry.elapsed - hrs) >= 0.4) {
-        history[dayKey].push({ elapsed: Math.round(hrs * 10) / 10, volume: currentVolume });
+        history[dayKey].push({ elapsed: Math.round(hrs * 10) / 10, volume: currentVolume, ibRate: ibTotal });
       }
 
       // Keep only last 14 days of data
@@ -580,8 +658,25 @@
         return best;
       }, null);
 
+      // IB Total rate yesterday at this point (only entries that recorded an IB rate)
+      const ibYesterdayMatch = yesterdayData.reduce((best, entry) => {
+        if (typeof entry.ibRate !== 'number') return best;
+        if (!best || Math.abs(entry.elapsed - hrs) < Math.abs(best.elapsed - hrs)) return entry;
+        return best;
+      }, null);
+      const histIbYesterday = document.getElementById('vp-hist-ib-yesterday');
+      if (ibTotal && ibYesterdayMatch && Math.abs(ibYesterdayMatch.elapsed - hrs) < 1) {
+        const ibHistDiff = ibTotal - ibYesterdayMatch.ibRate;
+        const ibHistDiffStr = ibHistDiff >= 0 ? `+${ibHistDiff.toFixed(1)}` : ibHistDiff.toFixed(1);
+        histIbYesterday.textContent = `${ibYesterdayMatch.ibRate.toFixed(1)} (${ibHistDiffStr})`;
+        histIbYesterday.style.color = ibHistDiff >= 0 ? '#69f0ae' : '#ff5252';
+      } else {
+        histIbYesterday.textContent = '—';
+        histIbYesterday.style.color = '#78909c';
+      }
+
       const histYesterday = document.getElementById('vp-hist-yesterday');
-      if (yesterdayMatch && Math.abs(yesterdayMatch.elapsed - hrs) < 1) {
+      if (currentVolume && yesterdayMatch && typeof yesterdayMatch.volume === 'number' && Math.abs(yesterdayMatch.elapsed - hrs) < 1) {
         const diff = currentVolume - yesterdayMatch.volume;
         const diffStr = diff >= 0 ? `+${diff.toLocaleString()}` : diff.toLocaleString();
         histYesterday.textContent = `${yesterdayMatch.volume.toLocaleString()} (${diffStr})`;
@@ -602,13 +697,13 @@
           if (!best || Math.abs(entry.elapsed - hrs) < Math.abs(best.elapsed - hrs)) return entry;
           return best;
         }, null);
-        if (match && Math.abs(match.elapsed - hrs) < 1) {
+        if (match && typeof match.volume === 'number' && Math.abs(match.elapsed - hrs) < 1) {
           weekVolumes.push(match.volume);
         }
       }
 
       const histWeek = document.getElementById('vp-hist-week');
-      if (weekVolumes.length >= 2) {
+      if (currentVolume && weekVolumes.length >= 2) {
         const avg = Math.round(weekVolumes.reduce((a, b) => a + b, 0) / weekVolumes.length);
         const diff = currentVolume - avg;
         const diffStr = diff >= 0 ? `+${diff.toLocaleString()}` : diff.toLocaleString();
@@ -623,26 +718,25 @@
 
   // --- Init ---
   function init() {
-    let polls = 0;
-    const poller = setInterval(() => {
-      polls++;
-      const hasData = document.body.innerText.includes('Stations') ||
-                      document.body.innerText.includes('Transfer In');
-      if (hasData || polls >= 20) {
-        clearInterval(poller);
+    // Show the panel immediately on dashboard load; values fill in as page data arrives
+    buildPanel();
+    updatePanel();
+
+    // Refresh every 60 seconds
+    setInterval(() => {
+      buildPanel(); // re-add if the dashboard re-rendered and removed it
+      updatePanel();
+    }, 60000);
+
+    // Also update on DOM changes (covers data loading in after the panel appears)
+    const observer = new MutationObserver(() => {
+      clearTimeout(observer._debounce);
+      observer._debounce = setTimeout(() => {
         buildPanel();
         updatePanel();
-        // Refresh every 60 seconds
-        setInterval(updatePanel, 60000);
-
-        // Also update on DOM changes
-        const observer = new MutationObserver(() => {
-          clearTimeout(observer._debounce);
-          observer._debounce = setTimeout(updatePanel, 2000);
-        });
-        observer.observe(document.body, { childList: true, subtree: true });
-      }
-    }, 3000);
+      }, 2000);
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
   }
 
   if (document.readyState === 'loading') {
