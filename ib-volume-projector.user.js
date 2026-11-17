@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         IB Flow - Volume Projector
 // @namespace    http://tampermonkey.net/
-// @version      1.3
+// @version      1.7
 // @description  Calculates expected volume potential for the remainder of the shift using Hours Left × Headcount × ETI Rate
 // @updateURL    https://raw.githubusercontent.com/nloprete/amazon-ops-tools/main/ib-volume-projector.user.js
 // @downloadURL  https://raw.githubusercontent.com/nloprete/amazon-ops-tools/main/ib-volume-projector.user.js
@@ -27,7 +27,7 @@
       font-family: "Amazon Ember", Arial, sans-serif;
       border: 2px solid #4fc3f7;
       box-shadow: 0 4px 20px rgba(0,0,0,0.4);
-      min-width: 650px;
+      min-width: 900px;
       resize: both;
       overflow: auto;
     }
@@ -227,7 +227,7 @@
     // Structure-agnostic: find the element whose own text is exactly "IB Total"
     // (it's a link on the dashboard), then walk up to the nearest ancestor that
     // holds the row's numbers and read them from the text after the label.
-    let ibTotal = null;
+    let ibTotal = null, ibTotalVol = null, ibTotalHrs = null;
     const ibLabels = Array.from(document.querySelectorAll('a, span, div, td, th, p, button, strong, b'))
       .filter(el => !el.closest('.vol-proj-panel') && /^IB\s*Total$/i.test((el.textContent || '').trim()));
     for (const label of ibLabels) {
@@ -241,6 +241,8 @@
         if (nums.length >= 3) {
           // Volume, Hours, Rate -> rate is the third number after the label
           ibTotal = nums[2];
+          ibTotalVol = nums[0];
+          ibTotalHrs = nums[1];
           break;
         }
         node = node.parentElement;
@@ -251,7 +253,7 @@
       console.debug('[Volume Projector] IB Total row not found. Labels matched:', ibLabels.length);
     }
 
-    return { stations, etiRate, hoursElapsed, currentVolume, ibHours, ibTotal };
+    return { stations, etiRate, hoursElapsed, currentVolume, ibHours, ibTotal, ibTotalVol, ibTotalHrs };
   }
 
   // --- Build Panel ---
@@ -265,6 +267,9 @@
     panel.innerHTML = `
       <div class="vp-title">📊 Volume Projector <button id="vp-minimize" style="float:right;background:none;border:none;color:#aab7c4;font-size:14px;cursor:pointer;padding:0 4px;font-family:'Amazon Ember',Arial,sans-serif;">—</button></div>
       <div class="vp-body">
+      <div style="text-align:right;margin-bottom:8px;">
+        <button id="vp-set60" style="background:#2a2a4e;border:1px solid #4fc3f7;color:#aab7c4;border-radius:4px;padding:3px 12px;font-size:12px;font-weight:700;cursor:pointer;font-family:'Amazon Ember',Arial,sans-serif;">SET+60</button>
+      </div>
       <div style="display:flex;gap:16px;">
         <div style="flex:1;">
           <div style="color:#69f0ae;font-weight:700;font-size:11px;text-align:center;margin-bottom:6px;">BEST CASE (+5%)</div>
@@ -319,6 +324,8 @@
         </div>
       </div>
       <div class="vp-divider"></div>
+      <div style="display:flex;gap:16px;">
+      <div style="flex:1;">
       <div class="vp-row">
         <span class="vp-label">Planned Hours</span>
         <input type="number" id="vp-planned-hrs-input" placeholder="Enter hours" style="background:#2a2a4e;border:1px solid #4fc3f7;color:#fff;border-radius:4px;padding:2px 6px;width:90px;font-size:12px;font-weight:700;text-align:right;font-family:'Amazon Ember',Arial,sans-serif;">
@@ -338,10 +345,15 @@
       <div id="vp-pace-bar" style="height:6px;border-radius:3px;background:#3a4553;margin-top:4px;overflow:hidden;">
         <div id="vp-pace-fill" style="height:100%;border-radius:3px;width:0%;transition:width 0.5s;"></div>
       </div>
-      <div class="vp-divider"></div>
+      </div>
+      <div style="flex:1;border-left:1px solid #3a4553;padding-left:16px;">
       <div class="vp-row">
         <span class="vp-label">IB Total Rate</span>
         <span class="vp-value" id="vp-ib-total">...</span>
+      </div>
+      <div class="vp-row">
+        <span class="vp-label">IB Total Proj. EOS Rate</span>
+        <span class="vp-value" id="vp-ib-proj">...</span>
       </div>
       <div class="vp-row">
         <span class="vp-label">IB Total Goal</span>
@@ -354,11 +366,14 @@
       <div style="height:6px;border-radius:3px;background:#3a4553;margin-top:4px;overflow:hidden;">
         <div id="vp-ib-pace-fill" style="height:100%;border-radius:3px;width:0%;transition:width 0.5s;"></div>
       </div>
-      <div class="vp-divider"></div>
+      </div>
+      <div style="flex:1;border-left:1px solid #3a4553;padding-left:16px;">
       <div style="font-size:11px;color:#78909c;margin-bottom:4px;">📅 Historical</div>
       <div class="vp-row"><span class="vp-label">Yesterday at this point</span><span class="vp-value" id="vp-hist-yesterday">—</span></div>
       <div class="vp-row"><span class="vp-label">Last week avg at this point</span><span class="vp-value" id="vp-hist-week">—</span></div>
       <div class="vp-row"><span class="vp-label">IB Total yesterday at this point</span><span class="vp-value" id="vp-hist-ib-yesterday">—</span></div>
+      </div>
+      </div>
       <div class="vp-timestamp" id="vp-timestamp"></div>
       </div>
     `;
@@ -417,6 +432,22 @@
 
     // Minimize toggle
     const minBtn = panel.querySelector('#vp-minimize');
+    // SET+60 toggle — adds 60 minutes to projections when on
+    const set60Btn = panel.querySelector('#vp-set60');
+    function applySet60() {
+      const on = localStorage.getItem('vp_set60') === 'true';
+      set60Btn.style.background = on ? '#69f0ae' : '#2a2a4e';
+      set60Btn.style.color = on ? '#1a1a2e' : '#aab7c4';
+      set60Btn.title = on ? 'ON: projections include +60 min' : 'OFF';
+    }
+    applySet60();
+    set60Btn.addEventListener('click', () => {
+      const on = localStorage.getItem('vp_set60') === 'true';
+      localStorage.setItem('vp_set60', String(!on));
+      applySet60();
+      updatePanel();
+    });
+
     // Always start expanded when the dashboard loads; minimize only lasts for this page view
     let minimized = false;
     localStorage.removeItem('vp_minimized');
@@ -434,7 +465,7 @@
   }
 
   function updatePanel() {
-    const { stations, etiRate, hoursElapsed, currentVolume, ibHours, ibTotal } = scrapePageData();
+    const { stations, etiRate, hoursElapsed, currentVolume, ibHours, ibTotal, ibTotalVol, ibTotalHrs } = scrapePageData();
     const { remaining, shiftName, elapsed, shiftHours } = getShiftInfo();
 
     const stationsEl = document.getElementById('vp-stations');
@@ -450,7 +481,9 @@
     if (!stationsEl) return;
 
     const hrs = hoursElapsed || elapsed;
-    const hrsLeft = hoursElapsed ? (shiftHours - hoursElapsed) : remaining;
+    let hrsLeft = hoursElapsed ? (shiftHours - hoursElapsed) : remaining;
+    // SET+60: add 60 minutes to the remaining time used by all projections
+    if (localStorage.getItem('vp_set60') === 'true') hrsLeft += 1;
 
     stationsEl.textContent = stations ? stations.toLocaleString() : '—';
 
@@ -601,9 +634,30 @@
 
     ibTotalEl.textContent = ibTotal ? ibTotal.toFixed(1) : '—';
 
-    if (ibGoal > 0 && ibTotal) {
-      const ibDiff = ibTotal - ibGoal;
-      const ibPct = Math.round((ibTotal / ibGoal) * 100);
+    // Projected end-of-shift IB Total rate:
+    // (IB volume so far + hours left x stations x ETI rate) / (IB Total hours so far + hours left x stations x overhead multiplier)
+    // IB Total hours include direct (Each Transfer In) plus support, lead/PA, problem solve
+    // and stow to prime. Each direct station-hour therefore carries overhead hours:
+    // overhead multiplier = IB Total hours / Each Transfer In hours (e.g. 779.3 / 431.2 = 1.81).
+    let ibProjRate = null;
+    if (ibTotalVol && ibTotalHrs && ibHours && stations && etiRate && hrsLeft > 0) {
+      const overheadMult = ibTotalHrs / ibHours;
+      const remVolume = hrsLeft * stations * etiRate;
+      const remIbHours = hrsLeft * stations * overheadMult;
+      ibProjRate = (ibTotalVol + remVolume) / (ibTotalHrs + remIbHours);
+    }
+    const ibProjEl = document.getElementById('vp-ib-proj');
+    ibProjEl.textContent = ibProjRate ? ibProjRate.toFixed(1) : '—';
+    ibProjEl.style.color = '#fff';
+    if (ibProjRate && ibTotal) {
+      ibProjEl.style.color = ibProjRate >= ibTotal ? '#69f0ae' : '#ff9800';
+    }
+
+    // Goal comparison uses the projected EOS rate when available, else the current rate
+    const ibCompare = ibProjRate || ibTotal;
+    if (ibGoal > 0 && ibCompare) {
+      const ibDiff = ibCompare - ibGoal;
+      const ibPct = Math.round((ibCompare / ibGoal) * 100);
       const ibColor = ibDiff >= 0 ? '#69f0ae' : (ibPct >= 90 ? '#ff9800' : '#ff5252');
       ibPaceEl.textContent = ibDiff >= 0
         ? `ON PACE +${ibDiff.toFixed(1)} (${ibPct}%)`
